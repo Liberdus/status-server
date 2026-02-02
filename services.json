@@ -1,0 +1,128 @@
+[
+  {
+    "id": "dev-gateway",
+    "name": "Gateway",
+    "network": "devnet",
+    "group": "Devnet",
+    "urlEnv": "SVC_DEV_GATEWAY_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "online"
+  },
+  {
+    "id": "dev-archiver",
+    "name": "Archiver",
+    "network": "devnet",
+    "group": "Devnet",
+    "urlEnv": "SVC_DEV_ARCHIVER_URL",
+    "checker": "cycleFreshSeconds",
+    "maxAgeSeconds": 120
+  },
+  {
+    "id": "dev-explorer",
+    "name": "Explorer",
+    "network": "devnet",
+    "group": "Devnet",
+    "urlEnv": "SVC_DEV_EXPLORER_URL",
+    "checker": "cycleFreshSeconds",
+    "maxAgeSeconds": 120
+  },
+  {
+    "id": "dev-notification",
+    "name": "Notification",
+    "network": "devnet",
+    "group": "Devnet",
+    "urlEnv": "SVC_DEV_NOTIFICATION_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "healthy"
+  },
+  {
+    "id": "dev-monitor",
+    "name": "Monitor",
+    "network": "devnet",
+    "group": "Devnet",
+    "urlEnv": "SVC_DEV_MONITOR_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "online"
+  },
+  {
+    "id": "test-gateway",
+    "name": "Gateway",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_TEST_GATEWAY_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "online"
+  },
+  {
+    "id": "test-archiver-1",
+    "name": "Archiver 1",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_TEST_ARCHIVER_1_URL",
+    "checker": "cycleFreshSeconds",
+    "maxAgeSeconds": 120
+  },
+  {
+    "id": "test-archiver-2",
+    "name": "Archiver 2",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_TEST_ARCHIVER_2_URL",
+    "checker": "cycleFreshSeconds",
+    "maxAgeSeconds": 120
+  },
+  {
+    "id": "test-explorer",
+    "name": "Explorer",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_TEST_EXPLORER_URL",
+    "checker": "cycleFreshSeconds",
+    "maxAgeSeconds": 120
+  },
+  {
+    "id": "test-notification",
+    "name": "Notification",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_TEST_NOTIFICATION_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "healthy"
+  },
+  {
+    "id": "oauth",
+    "name": "OAuth",
+    "network": "shared",
+    "group": "Core",
+    "urlEnv": "SVC_OAUTH_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "ok"
+  },
+  {
+    "id": "test-monitor",
+    "name": "Monitor",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_TEST_MONITOR_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "online"
+  },
+  {
+    "id": "faucet",
+    "name": "Faucet",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_FAUCET_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "ok"
+  },
+  {
+    "id": "goldenticket",
+    "name": "GoldenTicket",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_GOLDENTICKET_URL",
+    "checker": "statusEquals",
+    "expectedStatus": "healthy"
+  }
+]
