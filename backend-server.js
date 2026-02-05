@@ -47,7 +47,7 @@ try {
   );
 }
 
-const PORT = process.env.PORT || 6969;
+const PORT = process.env.PORT || 443;
 
 let SERVICES = [];
 try {
@@ -205,7 +205,12 @@ async function probeService(service) {
     };
   }
   try {
-    const payload = await httpJsonGet(service.url, 5000);
+    const timeoutMs =
+      Number.isFinite(Number(process.env.PROBE_HTTP_TIMEOUT_MS)) &&
+      Number(process.env.PROBE_HTTP_TIMEOUT_MS) > 0
+        ? Math.floor(Number(process.env.PROBE_HTTP_TIMEOUT_MS))
+        : 5000;
+    const payload = await httpJsonGet(service.url, timeoutMs);
     const latencyMs = Date.now() - startedAt;
     const baseCheck =
       service.checker === "statusEquals"
@@ -298,6 +303,149 @@ let latestSnapshot = {
   statusDescription: "Unknown",
 };
 
+const BUCKET_MINUTES =
+  Number.isFinite(Number(process.env.HISTORY_BUCKET_MINUTES)) &&
+  Number(process.env.HISTORY_BUCKET_MINUTES) > 0
+    ? Math.floor(Number(process.env.HISTORY_BUCKET_MINUTES))
+    : 5;
+const BUCKET_INTERVAL_MS = BUCKET_MINUTES * 60 * 1000;
+
+const DEFAULT_PROBE_INTERVAL_MS = 60000;
+const PROBE_INTERVAL_MS =
+  Number.isFinite(Number(process.env.PROBE_INTERVAL_MS)) &&
+  Number(process.env.PROBE_INTERVAL_MS) > 0
+    ? Math.floor(Number(process.env.PROBE_INTERVAL_MS))
+    : DEFAULT_PROBE_INTERVAL_MS;
+
+let currentBucketStartMs = null;
+const inMemoryBuckets = new Map();
+
+function flushCurrentBucket() {
+  if (!db) return;
+  if (currentBucketStartMs == null) return;
+  if (!inMemoryBuckets.size) return;
+  const stmt = db.prepare(
+    "INSERT INTO service_history (service_id, state, latency_ms, checked_at) VALUES (?, ?, ?, ?)"
+  );
+  for (const service of SERVICES) {
+    const stats = inMemoryBuckets.get(service.id);
+    if (!stats || !stats.totalCount) {
+      continue;
+    }
+    const total = stats.totalCount;
+    const pDown = stats.downCount / total;
+    const pIssue = stats.issueCount / total;
+    const pSlow = stats.slowCount / total;
+    let historyState = "up";
+    if (pDown >= 0.8) {
+      historyState = "down";
+    } else if (pIssue + pDown >= 0.3) {
+      historyState = "issue";
+    } else if (pSlow + pIssue + pDown >= 0.3) {
+      historyState = "slow";
+    } else {
+      historyState = "up";
+    }
+    const latencyMs =
+      total > 0 ? Math.round(stats.latencySumMs / total) : null;
+    stmt.run(
+      service.id,
+      historyState,
+      latencyMs,
+      currentBucketStartMs
+    );
+  }
+  stmt.finalize();
+  const retentionMs = 7 * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - retentionMs;
+  db.run("DELETE FROM service_history WHERE checked_at < ?", [cutoff]);
+  inMemoryBuckets.clear();
+  process.stdout.write(
+    `History bucket flushed at ${new Date(
+      currentBucketStartMs
+    ).toISOString()}\n`
+  );
+}
+
+function recordSamples(results) {
+  if (!db) return;
+  const now = Date.now();
+  const bucketStart =
+    Math.floor(now / BUCKET_INTERVAL_MS) * BUCKET_INTERVAL_MS;
+  if (currentBucketStartMs == null) {
+    currentBucketStartMs = bucketStart;
+  } else if (bucketStart !== currentBucketStartMs) {
+    flushCurrentBucket();
+    currentBucketStartMs = bucketStart;
+  }
+  const insertStmt = db.prepare(
+    "INSERT INTO service_history (service_id, state, latency_ms, checked_at) VALUES (?, ?, ?, ?)"
+  );
+  for (const service of results) {
+    const id = service.id;
+    let stats = inMemoryBuckets.get(id);
+    if (!stats) {
+      stats = {
+        okCount: 0,
+        slowCount: 0,
+        issueCount: 0,
+        downCount: 0,
+        totalCount: 0,
+        latencySumMs: 0,
+      };
+      inMemoryBuckets.set(id, stats);
+    }
+    const pct =
+      typeof service.healthPct === "number" ? service.healthPct : null;
+    let sampleKind = "up";
+    if (pct == null || Number.isNaN(pct)) {
+      sampleKind = service.state || "up";
+    } else if (pct === 0) {
+      sampleKind = "down";
+    } else if (pct === 20) {
+      sampleKind = "issue";
+    } else if (pct === 80) {
+      sampleKind = "slow";
+    } else {
+      sampleKind = "up";
+    }
+    stats.totalCount += 1;
+    stats.latencySumMs +=
+      typeof service.latencyMs === "number" ? service.latencyMs : 0;
+    if (sampleKind === "down") {
+      stats.downCount += 1;
+    } else if (sampleKind === "issue" || sampleKind === "degraded") {
+      stats.issueCount += 1;
+    } else if (sampleKind === "slow") {
+      stats.slowCount += 1;
+    } else {
+      stats.okCount += 1;
+    }
+
+    const latencyMs =
+      typeof service.latencyMs === "number" ? service.latencyMs : null;
+    const checkedAt = Date.parse(service.lastCheckedAt);
+    const effectiveCheckedAt = Number.isNaN(checkedAt) ? now : checkedAt;
+    let historyState = "up";
+    if (sampleKind === "down") {
+      historyState = "down";
+    } else if (sampleKind === "issue" || sampleKind === "degraded") {
+      historyState = "issue";
+    } else if (sampleKind === "slow") {
+      historyState = "slow";
+    } else {
+      historyState = "up";
+    }
+    insertStmt.run(
+      id,
+      historyState,
+      latencyMs,
+      effectiveCheckedAt
+    );
+  }
+  insertStmt.finalize();
+}
+
 function resolveIntervalMinutes(raw) {
   if (!raw || typeof raw !== "string") return 1440;
   const value = raw.toLowerCase();
@@ -360,7 +508,16 @@ function queryHistory(days, intervalMinutes, network, callback) {
       }
       let bucket = perService.get(bucketStart);
       if (!bucket) {
-        bucket = { scoreSum: 0, totalCount: 0, minScore: 100 };
+        bucket = {
+          scoreSum: 0,
+          totalCount: 0,
+          minScore: 100,
+          upCount: 0,
+          slowCount: 0,
+          issueCount: 0,
+          downCount: 0,
+          firstDownAt: null,
+        };
         perService.set(bucketStart, bucket);
       }
       let sampleScore = 0;
@@ -377,6 +534,18 @@ function queryHistory(days, intervalMinutes, network, callback) {
       }
       bucket.totalCount += 1;
       bucket.scoreSum += sampleScore;
+      if (sampleScore === 100) {
+        bucket.upCount += 1;
+      } else if (sampleScore === 80) {
+        bucket.slowCount += 1;
+      } else if (sampleScore === 20) {
+        bucket.issueCount += 1;
+      } else {
+        bucket.downCount += 1;
+        if (bucket.firstDownAt == null || checkedAt < bucket.firstDownAt) {
+          bucket.firstDownAt = checkedAt;
+        }
+      }
       if (sampleScore < bucket.minScore) {
         bucket.minScore = sampleScore;
       }
@@ -397,16 +566,45 @@ function queryHistory(days, intervalMinutes, network, callback) {
       const serviceId = service.id;
       const buckets = byService.get(serviceId) || new Map();
       const history = [];
+      const countsUp = [];
+      const countsSlow = [];
+      const countsIssue = [];
+      const countsDown = [];
+      const countsTotal = [];
+      const firstDownAt = [];
       for (let i = 0; i < bucketCount; i += 1) {
         const startMs = startBucketStart + i * intervalMs;
         const bucket = buckets.get(startMs);
         const totalCount = bucket ? bucket.totalCount || 0 : 0;
         const minScore = bucket ? bucket.minScore : null;
-        const successPct =
-          totalCount > 0 && minScore != null ? minScore : 0;
+        let successPct = null;
+        if (totalCount > 0 && minScore != null) {
+          successPct = minScore;
+        } else {
+          successPct = null;
+        }
         history.push(successPct);
+         countsUp.push(bucket ? bucket.upCount || 0 : 0);
+         countsSlow.push(bucket ? bucket.slowCount || 0 : 0);
+         countsIssue.push(bucket ? bucket.issueCount || 0 : 0);
+         countsDown.push(bucket ? bucket.downCount || 0 : 0);
+         countsTotal.push(totalCount);
+         firstDownAt.push(
+           bucket && bucket.firstDownAt != null ? bucket.firstDownAt : null
+         );
       }
-      services.push({ id: serviceId, history });
+      services.push({
+        id: serviceId,
+        history,
+        counts: {
+          up: countsUp,
+          slow: countsSlow,
+          issue: countsIssue,
+          down: countsDown,
+          total: countsTotal,
+        },
+        firstDownAt,
+      });
     }
     process.stdout.write(
       `History query complete for last ${clampedDays} days across ${services.length} services at interval=${safeIntervalMinutes}m\n`
@@ -423,41 +621,7 @@ function queryHistory(days, intervalMinutes, network, callback) {
 async function refreshSnapshot() {
   const results = await Promise.all(SERVICES.map((service) => probeService(service)));
   const indicator = computeIndicator(results);
-  if (db) {
-    const stmt = db.prepare(
-      "INSERT INTO service_history (service_id, state, latency_ms, checked_at) VALUES (?, ?, ?, ?)"
-    );
-    for (const service of results) {
-      const checkedAt = Date.parse(service.lastCheckedAt);
-      const pct =
-        typeof service.healthPct === "number" ? service.healthPct : null;
-      let historyState = "up";
-      if (pct == null || Number.isNaN(pct)) {
-        historyState = service.state || "up";
-      } else if (pct < 10) {
-        historyState = "down";
-      } else if (pct < 50) {
-        historyState = "issue";
-      } else if (pct < 95) {
-        historyState = "slow";
-      } else {
-        historyState = "up";
-      }
-      stmt.run(
-        service.id,
-        historyState,
-        service.latencyMs,
-        Number.isNaN(checkedAt) ? Date.now() : checkedAt
-      );
-    }
-    stmt.finalize();
-    const retentionMs = 7 * 24 * 60 * 60 * 1000;
-    const cutoff = Date.now() - retentionMs;
-    db.run(
-      "DELETE FROM service_history WHERE checked_at < ?",
-      [cutoff]
-    );
-  }
+  recordSamples(results);
   process.stdout.write(
     `Snapshot refreshed: ${results.length} services, indicator=${indicator.indicator}\n`
   );
@@ -484,7 +648,7 @@ setInterval(() => {
       )}\n`
     );
   });
-}, 300000);
+}, PROBE_INTERVAL_MS);
 
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && (req.url === "/" || req.url === "")) {
