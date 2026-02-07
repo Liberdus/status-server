@@ -20,7 +20,11 @@ function loadEnvFile(filePath) {
         process.env[key] = value;
       }
     }
-  } catch (error) {}
+  } catch (error) {
+    process.stderr.write(
+      `Warning: Failed to load .env file: ${error && error.message ? error.message : String(error)}\n`
+    );
+  }
 }
 
 loadEnvFile(path.join(__dirname, ".env"));
@@ -98,9 +102,19 @@ function httpJsonGet(targetUrl, timeoutMs) {
       method: "GET",
       timeout: timeoutMs,
     };
+    const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB limit
     const req = transport.request(options, (res) => {
       const chunks = [];
+      let totalSize = 0;
       res.on("data", (chunk) => {
+        if (settled) return;
+        totalSize += chunk.length;
+        if (totalSize > MAX_BODY_SIZE) {
+          settled = true;
+          req.destroy(new Error("Response body exceeds maximum size"));
+          reject(new Error("Response body exceeds maximum size"));
+          return;
+        }
         chunks.push(chunk);
       });
       res.on("end", () => {
@@ -424,39 +438,55 @@ async function refreshSnapshot() {
   const results = await Promise.all(SERVICES.map((service) => probeService(service)));
   const indicator = computeIndicator(results);
   if (db) {
-    const stmt = db.prepare(
-      "INSERT INTO service_history (service_id, state, latency_ms, checked_at) VALUES (?, ?, ?, ?)"
-    );
-    for (const service of results) {
-      const checkedAt = Date.parse(service.lastCheckedAt);
-      const pct =
-        typeof service.healthPct === "number" ? service.healthPct : null;
-      let historyState = "up";
-      if (pct == null || Number.isNaN(pct)) {
-        historyState = service.state || "up";
-      } else if (pct < 10) {
-        historyState = "down";
-      } else if (pct < 50) {
-        historyState = "issue";
-      } else if (pct < 95) {
-        historyState = "slow";
-      } else {
-        historyState = "up";
+    try {
+      const stmt = db.prepare(
+        "INSERT INTO service_history (service_id, state, latency_ms, checked_at) VALUES (?, ?, ?, ?)"
+      );
+      try {
+        for (const service of results) {
+          const checkedAt = Date.parse(service.lastCheckedAt);
+          const pct =
+            typeof service.healthPct === "number" ? service.healthPct : null;
+          let historyState = "up";
+          if (pct == null || Number.isNaN(pct)) {
+            historyState = service.state || "up";
+          } else if (pct < 10) {
+            historyState = "down";
+          } else if (pct < 50) {
+            historyState = "issue";
+          } else if (pct < 95) {
+            historyState = "slow";
+          } else {
+            historyState = "up";
+          }
+          stmt.run(
+            service.id,
+            historyState,
+            service.latencyMs,
+            Number.isNaN(checkedAt) ? Date.now() : checkedAt
+          );
+        }
+      } finally {
+        stmt.finalize();
       }
-      stmt.run(
-        service.id,
-        historyState,
-        service.latencyMs,
-        Number.isNaN(checkedAt) ? Date.now() : checkedAt
+      const retentionMs = 7 * 24 * 60 * 60 * 1000;
+      const cutoff = Date.now() - retentionMs;
+      db.run(
+        "DELETE FROM service_history WHERE checked_at < ?",
+        [cutoff],
+        (err) => {
+          if (err) {
+            process.stdout.write(
+              `Warning: Failed to clean old history: ${err.message}\n`
+            );
+          }
+        }
+      );
+    } catch (error) {
+      process.stdout.write(
+        `Warning: Failed to save history: ${error && error.message ? error.message : String(error)}\n`
       );
     }
-    stmt.finalize();
-    const retentionMs = 7 * 24 * 60 * 60 * 1000;
-    const cutoff = Date.now() - retentionMs;
-    db.run(
-      "DELETE FROM service_history WHERE checked_at < ?",
-      [cutoff]
-    );
   }
   process.stdout.write(
     `Snapshot refreshed: ${results.length} services, indicator=${indicator.indicator}\n`
@@ -568,3 +598,35 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   process.stdout.write(`Status backend listening on http://localhost:${PORT}\n`);
 });
+
+function gracefulShutdown() {
+  process.stdout.write("Shutting down gracefully...\n");
+  server.close(() => {
+    process.stdout.write("HTTP server closed\n");
+    if (db) {
+      db.close((err) => {
+        if (err) {
+          process.stderr.write(`Error closing database: ${err.message}\n`);
+          process.exit(1);
+        } else {
+          process.stdout.write("Database closed\n");
+          process.exit(0);
+        }
+      });
+    } else {
+      process.exit(0);
+    }
+  });
+  
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    process.stderr.write("Forced shutdown after timeout\n");
+    if (db) {
+      db.close(() => {});
+    }
+    process.exit(1);
+  }, 10000);
+}
+
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
