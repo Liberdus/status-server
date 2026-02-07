@@ -45,8 +45,7 @@ try {
 } catch (error) {
   db = null;
   process.stdout.write(
-    `SQLite history database disabled: ${
-      error && error.message ? error.message : String(error)
+    `SQLite history database disabled: ${error && error.message ? error.message : String(error)
     }\n`
   );
 }
@@ -70,8 +69,8 @@ try {
           ? service.network
           : typeof service.environment === "string" &&
             service.environment.length > 0
-          ? service.environment
-          : null;
+            ? service.environment
+            : null;
       return {
         id: service.id,
         name: service.name,
@@ -225,8 +224,8 @@ async function probeService(service) {
       service.checker === "statusEquals"
         ? checkByStatusEquals(service, payload)
         : service.checker === "cycleFreshSeconds"
-        ? checkByCycleFresh(service, payload)
-        : { ok: false, reason: "Unknown checker configuration" };
+          ? checkByCycleFresh(service, payload)
+          : { ok: false, reason: "Unknown checker configuration" };
     let state = "operational";
     let detail = baseCheck.reason || null;
     let healthPct = 100;
@@ -278,10 +277,10 @@ function computeIndicator(services) {
         typeof service.healthPct === "number"
           ? service.healthPct
           : service.state === "operational"
-          ? 100
-          : service.state === "degraded"
-          ? 20
-          : 0;
+            ? 100
+            : service.state === "degraded"
+              ? 20
+              : 0;
       if (pct === 0) {
         outageCount += 1;
       } else if (pct < 100) {
@@ -617,12 +616,12 @@ function gracefulShutdown() {
       process.exit(0);
     }
   });
-  
+
   // Force shutdown after 10 seconds
   setTimeout(() => {
     process.stderr.write("Forced shutdown after timeout\n");
     if (db) {
-      db.close(() => {});
+      db.close(() => { });
     }
     process.exit(1);
   }, 10000);
