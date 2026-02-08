@@ -50,42 +50,141 @@ try {
   );
 }
 
-const PORT = process.env.PORT || 6969;
+function validateRuntimeConfig(rawPort, services) {
+  const response = { success: false, reason: "" };
+  const isNonEmptyString = (value) =>
+    typeof value === "string" && value.trim().length > 0;
+  const numericPort = Number(rawPort);
+  if (!Number.isInteger(numericPort)) {
+    response.reason = 'config "PORT" must be an integer';
+    return response;
+  }
+  if (numericPort < 1 || numericPort > 65535) {
+    response.reason = 'config "PORT" must be between 1 and 65535';
+    return response;
+  }
+  if (!Array.isArray(services)) {
+    response.reason = 'services.json must contain an array';
+    return response;
+  }
+  const seenIds = new Set();
+  for (let i = 0; i < services.length; i += 1) {
+    const service = services[i];
+    if (!service || typeof service !== "object") {
+      response.reason = `service[${i}] must be an object`;
+      return response;
+    }
+    if (!isNonEmptyString(service.id)) {
+      response.reason = `service[${i}] "id" must be a non-empty string`;
+      return response;
+    }
+    if (seenIds.has(service.id)) {
+      response.reason = `service[${i}] "id" must be unique`;
+      return response;
+    }
+    if (!isNonEmptyString(service.name)) {
+      response.reason = `service[${i}] "name" must be a non-empty string`;
+      return response;
+    }
+    if (!isNonEmptyString(service.checker)) {
+      response.reason = `service[${i}] "checker" must be a non-empty string`;
+      return response;
+    }
+    if (
+      service.checker !== "statusEquals" &&
+      service.checker !== "cycleFreshSeconds"
+    ) {
+      response.reason = `service[${i}] "checker" must be "statusEquals" or "cycleFreshSeconds"`;
+      return response;
+    }
+    if (service.checker === "statusEquals") {
+      if (!isNonEmptyString(service.expectedStatus)) {
+        response.reason = `service[${i}] "expectedStatus" must be a non-empty string when checker is "statusEquals"`;
+        return response;
+      }
+    }
+    if (service.checker === "cycleFreshSeconds") {
+      if (
+        typeof service.maxAgeSeconds !== "number" ||
+        !Number.isFinite(service.maxAgeSeconds) ||
+        service.maxAgeSeconds <= 0
+      ) {
+        response.reason = `service[${i}] "maxAgeSeconds" must be a number > 0 when checker is "cycleFreshSeconds"`;
+        return response;
+      }
+    }
+    if (service.urlEnv != null && !isNonEmptyString(service.urlEnv)) {
+      response.reason = `service[${i}] "urlEnv" must be a non-empty string when provided`;
+      return response;
+    }
+    if (service.url != null && !isNonEmptyString(service.url)) {
+      response.reason = `service[${i}] "url" must be a non-empty string when provided`;
+      return response;
+    }
+    const resolvedUrl =
+      service.urlEnv && typeof service.urlEnv === "string"
+        ? process.env[service.urlEnv]
+        : undefined;
+    const effectiveUrl = resolvedUrl || service.url;
+    if (!isNonEmptyString(effectiveUrl)) {
+      response.reason = `service[${i}] must define "url" or a valid "urlEnv"`;
+      return response;
+    }
+    try {
+      new URL(effectiveUrl);
+    } catch (error) {
+      response.reason = `service[${i}] URL is invalid`;
+      return response;
+    }
+    seenIds.add(service.id);
+  }
+  response.success = true;
+  return response;
+}
+
+const rawPort = process.env.PORT || 6969;
+const PORT = Number(rawPort);
 
 let SERVICES = [];
 try {
   const servicesConfigPath = path.join(__dirname, "services.json");
   const raw = fs.readFileSync(servicesConfigPath, "utf8");
   const parsed = JSON.parse(raw);
-  if (Array.isArray(parsed)) {
-    SERVICES = parsed.map((service) => {
-      const urlFromEnv =
-        service.urlEnv && typeof service.urlEnv === "string"
-          ? process.env[service.urlEnv]
-          : undefined;
-      const url = urlFromEnv || service.url || null;
-      const network =
-        typeof service.network === "string" && service.network.length > 0
-          ? service.network
-          : typeof service.environment === "string" &&
-            service.environment.length > 0
-            ? service.environment
-            : null;
-      return {
-        id: service.id,
-        name: service.name,
-        network,
-        environment: network,
-        group: service.group,
-        url,
-        checker: service.checker,
-        expectedStatus: service.expectedStatus,
-        maxAgeSeconds: service.maxAgeSeconds,
-      };
+  const validation = validateRuntimeConfig(rawPort, parsed);
+  if (!validation.success) {
+    throw new Error(validation.reason);
+  }
+  SERVICES = [];
+  for (const service of parsed) {
+    const urlFromEnv = service.urlEnv ? process.env[service.urlEnv] : undefined;
+    const url = urlFromEnv || service.url || null;
+    let network = null;
+    if (typeof service.network === "string" && service.network.length > 0) {
+      network = service.network;
+    } else if (
+      typeof service.environment === "string" &&
+      service.environment.length > 0
+    ) {
+      network = service.environment;
+    }
+    SERVICES.push({
+      id: service.id,
+      name: service.name,
+      network,
+      environment: network,
+      group: service.group,
+      url,
+      checker: service.checker,
+      expectedStatus: service.expectedStatus,
+      maxAgeSeconds: service.maxAgeSeconds,
     });
   }
 } catch (error) {
   SERVICES = [];
+  process.stderr.write(
+    `Invalid configuration: ${error && error.message ? error.message : String(error)}\n`
+  );
+  process.exit(1);
 }
 
 function httpJsonGet(targetUrl, timeoutMs) {
