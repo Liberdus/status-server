@@ -72,6 +72,15 @@
     "maxAgeSeconds": 120
   },
   {
+    "id": "test-archiver-3",
+    "name": "Archiver 3",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_TEST_ARCHIVER_3_URL",
+    "checker": "cycleFreshSeconds",
+    "maxAgeSeconds": 120
+  },
+  {
     "id": "test-explorer",
     "name": "Explorer",
     "network": "testnet",

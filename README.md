@@ -20,6 +20,7 @@ The dashboard can talk to a small Node.js backend that probes your services and 
    ```dotenv
    SVC_DEV_GATEWAY_URL=https://example.dev/gateway/status
    SVC_DEV_ARCHIVER_URL=https://example.dev/archiver/status
+   SVC_TEST_ARCHIVER_3_URL=https://example.test/archiver-3/cycleinfo/1
    # …other SVC_* variables as needed…
    ```
 3. Start the backend server (matching the frontend default `API_BASE` on port `7070`):
@@ -294,16 +295,16 @@ The important part is that it returns a `200 OK` with the CORS header so the fro
 
 ## Adding or removing services
 
-The backend tracks services via the `SERVICES` array in `backend-server.js`:
+The backend tracks services via `services.json`:
 
 ```js
 const SERVICES = [
   {
     id: "dev-gateway",
     name: "Gateway",
-    environment: "devnet",
+    network: "devnet",
     group: "Devnet",
-    url: process.env.SVC_DEV_GATEWAY_URL,
+    urlEnv: "SVC_DEV_GATEWAY_URL",
     checker: "statusEquals",
     expectedStatus: "online",
   },
@@ -317,9 +318,10 @@ To **add** a new service:
 2. Change:
    - `id` – a unique identifier for this service (no spaces).
    - `name` – label that will appear in the frontend.
-   - `environment` – e.g. `"devnet"`, `"testnet"`, `"shared"`.
+   - `network` – e.g. `"devnet"`, `"testnet"`, `"shared"`.
    - `group` – grouping label, such as `"Devnet"`, `"Testnet"`, `"Core"`.
-   - `url` – endpoint the backend should probe.
+   - `urlEnv` – optional environment variable name that can override the endpoint on the server.
+   - `url` – optional default endpoint the backend should probe when `urlEnv` is unset.
    - `checker` and its config:
      - `checker: "statusEquals"` with `expectedStatus`, when the endpoint returns JSON like `{ "status": "online" }`.
      - `checker: "cycleFreshSeconds"` with `maxAgeSeconds`, when the endpoint exposes cycle info and you want to ensure the latest cycle is recent.
