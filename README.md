@@ -21,6 +21,7 @@ The dashboard can talk to a small Node.js backend that probes your services and 
    SVC_DEV_GATEWAY_URL=https://example.dev/gateway/status
    SVC_DEV_ARCHIVER_URL=https://example.dev/archiver/status
    SVC_TEST_ARCHIVER_3_URL=https://example.test/archiver-3/cycleinfo/1
+   SVC_DISCORD_STATUS_BOT_URL=http://example.test:4702/discord/health
    DISCORD_STATUS_ALERT_CHANNEL_ID=123456789012345678
    DISCORD_STATUS_BOT_TOKEN=your_discord_bot_token
    # …other SVC_* variables as needed…
@@ -198,17 +199,12 @@ Run `discord-status-bot-listener.js` as its own process, separate from
 `backend-server.js`. This process watches the Discord status bot server from the
 status server host and posts to Discord if the bot server is down.
 
-By default, the listener checks:
-
-```text
-http://198.96.88.75:4702/discord/health
-```
-
-Override `SVC_DISCORD_STATUS_BOT_URL` only if the bot server health route changes.
-When the listener sees that route change from healthy to down, it sends a Discord
-message using the configured bot token:
+Configure `SVC_DISCORD_STATUS_BOT_URL` with the bot server health route. When the
+listener sees that route change from healthy to down, it sends a Discord message
+using the configured bot token:
 
 ```dotenv
+SVC_DISCORD_STATUS_BOT_URL=http://example.test:4702/discord/health
 DISCORD_STATUS_ALERT_CHANNEL_ID=123456789012345678
 DISCORD_STATUS_BOT_TOKEN=your_discord_bot_token
 ```
