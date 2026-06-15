@@ -99,6 +99,14 @@
     "expectedStatus": "healthy"
   },
   {
+    "id": "discord-status-bot",
+    "name": "Discord Status Bot",
+    "network": "testnet",
+    "group": "Testnet",
+    "urlEnv": "SVC_DISCORD_STATUS_BOT_URL",
+    "checker": "httpOk"
+  },
+  {
     "id": "oauth",
     "name": "OAuth",
     "network": "shared",

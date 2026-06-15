@@ -129,6 +129,55 @@ function httpJsonGet(targetUrl, timeoutMs) {
   });
 }
 
+function httpStatusGet(targetUrl, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const urlObj = new URL(targetUrl);
+    const isHttps = urlObj.protocol === "https:";
+    const transport = isHttps ? https : http;
+    const options = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      port: urlObj.port || (isHttps ? 443 : 80),
+      method: "GET",
+      timeout: timeoutMs,
+    };
+    const req = transport.request(options, (res) => {
+      res.resume();
+      res.on("end", () => {
+        if (settled) return;
+        settled = true;
+        resolve({ statusCode: res.statusCode });
+      });
+    });
+    req.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    req.on("timeout", () => {
+      if (settled) return;
+      settled = true;
+      req.destroy(new Error("Request timeout"));
+    });
+    req.end();
+  });
+}
+
+function checkByHttpOk(service, payload) {
+  const statusCode = Number(payload && payload.statusCode);
+  if (statusCode >= 200 && statusCode < 400) {
+    return { ok: true, reason: null };
+  }
+  if (Number.isFinite(statusCode)) {
+    return {
+      ok: false,
+      reason: `HTTP status ${statusCode} was outside the expected 2xx/3xx range`,
+    };
+  }
+  return { ok: false, reason: "Missing HTTP status code" };
+}
+
 function checkByStatusEquals(service, payload) {
   const { json } = payload;
   const value = json && typeof json === "object" ? json.status : undefined;
@@ -210,10 +259,15 @@ async function probeService(service) {
       Number(process.env.PROBE_HTTP_TIMEOUT_MS) > 0
         ? Math.floor(Number(process.env.PROBE_HTTP_TIMEOUT_MS))
         : 5000;
-    const payload = await httpJsonGet(service.url, timeoutMs);
+    const payload =
+      service.checker === "httpOk"
+        ? await httpStatusGet(service.url, timeoutMs)
+        : await httpJsonGet(service.url, timeoutMs);
     const latencyMs = Date.now() - startedAt;
     const baseCheck =
-      service.checker === "statusEquals"
+      service.checker === "httpOk"
+        ? checkByHttpOk(service, payload)
+        : service.checker === "statusEquals"
         ? checkByStatusEquals(service, payload)
         : service.checker === "cycleFreshSeconds"
         ? checkByCycleFresh(service, payload)

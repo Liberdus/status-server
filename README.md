@@ -21,6 +21,7 @@ The dashboard can talk to a small Node.js backend that probes your services and 
    SVC_DEV_GATEWAY_URL=https://example.dev/gateway/status
    SVC_DEV_ARCHIVER_URL=https://example.dev/archiver/status
    SVC_TEST_ARCHIVER_3_URL=https://example.test/archiver-3/cycleinfo/1
+   SVC_DISCORD_STATUS_BOT_URL=https://example.test/status-bot/health
    # …other SVC_* variables as needed…
    ```
 3. Start the backend server (matching the frontend default `API_BASE` on port `7070`):
@@ -175,6 +176,8 @@ The backend follows these rules for each probe:
 - If there is **no response** (timeout, connection error, etc.) →  
   - `state = "outage"`, `healthPct = 0`.
 - If the endpoint responds, run the configured checker:
+  - `checker: "httpOk"`:
+    - Treats any HTTP `2xx` or `3xx` response as healthy.
   - `checker: "statusEquals"`:
     - Compares the JSON `status` field to `expectedStatus`.
   - `checker: "cycleFreshSeconds"`:
@@ -325,6 +328,7 @@ To **add** a new service:
    - `checker` and its config:
      - `checker: "statusEquals"` with `expectedStatus`, when the endpoint returns JSON like `{ "status": "online" }`.
      - `checker: "cycleFreshSeconds"` with `maxAgeSeconds`, when the endpoint exposes cycle info and you want to ensure the latest cycle is recent.
+     - `checker: "httpOk"`, when you only need to confirm that an HTTP server responds.
 3. Add the corresponding environment variable in `.env`, for example:
 
    ```dotenv
