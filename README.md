@@ -22,6 +22,8 @@ The dashboard can talk to a small Node.js backend that probes your services and 
    SVC_DEV_ARCHIVER_URL=https://example.dev/archiver/status
    SVC_TEST_ARCHIVER_3_URL=https://example.test/archiver-3/cycleinfo/1
    SVC_DISCORD_STATUS_BOT_URL=https://example.test/status-bot/health
+   DISCORD_STATUS_ALERT_CHANNEL_ID=123456789012345678
+   DISCORD_STATUS_BOT_TOKEN=your_discord_bot_token
    # …other SVC_* variables as needed…
    ```
 3. Start the backend server (matching the frontend default `API_BASE` on port `7070`):
@@ -190,6 +192,33 @@ The backend follows these rules for each probe:
     - `state = "operational"`, `healthPct = 80` (slow but not degraded).
   - If the response took **1 second or less**:
     - `state = "operational"`, `healthPct = 100`.
+
+## Discord status bot alerting
+
+The status backend can watch the Discord status bot server from outside the bot
+server. Configure `SVC_DISCORD_STATUS_BOT_URL` to point at the bot server health
+route. The committed config does not include the real host; keep it in the
+server `.env`.
+
+When `discord-status-bot` changes from healthy to down, the status backend sends
+a Discord message using the configured bot token:
+
+```dotenv
+SVC_DISCORD_STATUS_BOT_URL=https://example.test/status-bot/health
+DISCORD_STATUS_ALERT_CHANNEL_ID=123456789012345678
+DISCORD_STATUS_BOT_TOKEN=your_discord_bot_token
+```
+
+The token can also be provided as `STATUS_DISCORD_BOT_TOKEN` or
+`DISCORD_BOT_TOKEN`. The channel can also be provided as
+`STATUS_DISCORD_ALERT_CHANNEL_ID`.
+
+Optional message overrides:
+
+```dotenv
+DISCORD_STATUS_BOT_DOWN_MESSAGE=Discord status bot server is down. Please restart it.
+DISCORD_STATUS_BOT_RECOVERY_MESSAGE=Discord status bot server is back online.
+```
 
 When the backend stores history, it converts `healthPct` into a daily/bucketed state using these thresholds:
 
