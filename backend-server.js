@@ -350,105 +350,6 @@ function computeIndicator(services) {
   return { indicator, description };
 }
 
-function postDiscordChannelMessage(channelId, token, content) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      content,
-      allowed_mentions: { parse: [] },
-    });
-    const req = https.request(
-      {
-        hostname: "discord.com",
-        path: `/api/v10/channels/${encodeURIComponent(channelId)}/messages`,
-        port: 443,
-        method: "POST",
-        headers: {
-          Authorization: `Bot ${token}`,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body),
-        },
-        timeout: 10000,
-      },
-      (res) => {
-        const chunks = [];
-        res.on("data", (chunk) => {
-          chunks.push(chunk);
-        });
-        res.on("end", () => {
-          const responseBody = Buffer.concat(chunks).toString("utf8");
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve();
-            return;
-          }
-          reject(
-            new Error(
-              `Discord API returned ${res.statusCode}: ${responseBody || "empty response"}`
-            )
-          );
-        });
-      }
-    );
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy(new Error("Discord API request timeout"));
-    });
-    req.write(body);
-    req.end();
-  });
-}
-
-async function notifyDiscordStatusBotState(service) {
-  if (!service || service.id !== DISCORD_STATUS_BOT_SERVICE_ID) return;
-  const state = service.state || "unknown";
-  const isDown = state !== "operational";
-  const alertKind = isDown ? "down" : "up";
-
-  if (lastDiscordStatusBotAlertKind === alertKind) {
-    lastDiscordStatusBotState = state;
-    return;
-  }
-
-  if (lastDiscordStatusBotAlertKind == null && !isDown) {
-    lastDiscordStatusBotState = state;
-    lastDiscordStatusBotAlertKind = alertKind;
-    return;
-  }
-
-  lastDiscordStatusBotState = state;
-  if (!DISCORD_ALERT_CHANNEL_ID || !DISCORD_ALERT_BOT_TOKEN) {
-    if (isDown) {
-      process.stdout.write(
-        "Discord status bot alert skipped: missing DISCORD_STATUS_ALERT_CHANNEL_ID or bot token\n"
-      );
-    }
-    lastDiscordStatusBotAlertKind = alertKind;
-    return;
-  }
-
-  const detail = service.detail ? ` Detail: ${service.detail}` : "";
-  const latency =
-    typeof service.latencyMs === "number" ? ` Latency: ${service.latencyMs}ms.` : "";
-  const message = isDown
-    ? `${DISCORD_ALERT_DOWN_MESSAGE} Status: ${state}.${detail}${latency}`
-    : `${DISCORD_ALERT_RECOVERY_MESSAGE} Status: ${state}.${latency}`;
-
-  try {
-    await postDiscordChannelMessage(
-      DISCORD_ALERT_CHANNEL_ID,
-      DISCORD_ALERT_BOT_TOKEN,
-      message
-    );
-    lastDiscordStatusBotAlertKind = alertKind;
-    process.stdout.write(`Discord status bot ${alertKind} alert sent\n`);
-  } catch (error) {
-    process.stdout.write(
-      `Discord status bot alert failed: ${
-        error && error.message ? error.message : String(error)
-      }\n`
-    );
-  }
-}
-
 let latestSnapshot = {
   generatedAt: null,
   services: [],
@@ -470,28 +371,8 @@ const PROBE_INTERVAL_MS =
     ? Math.floor(Number(process.env.PROBE_INTERVAL_MS))
     : DEFAULT_PROBE_INTERVAL_MS;
 
-const DISCORD_STATUS_BOT_SERVICE_ID =
-  process.env.DISCORD_STATUS_BOT_SERVICE_ID || "discord-status-bot";
-const DISCORD_ALERT_CHANNEL_ID =
-  process.env.DISCORD_STATUS_ALERT_CHANNEL_ID ||
-  process.env.STATUS_DISCORD_ALERT_CHANNEL_ID ||
-  null;
-const DISCORD_ALERT_BOT_TOKEN =
-  process.env.DISCORD_STATUS_BOT_TOKEN ||
-  process.env.STATUS_DISCORD_BOT_TOKEN ||
-  process.env.DISCORD_BOT_TOKEN ||
-  null;
-const DISCORD_ALERT_DOWN_MESSAGE =
-  process.env.DISCORD_STATUS_BOT_DOWN_MESSAGE ||
-  "Discord status bot server is down. Please restart it.";
-const DISCORD_ALERT_RECOVERY_MESSAGE =
-  process.env.DISCORD_STATUS_BOT_RECOVERY_MESSAGE ||
-  "Discord status bot server is back online.";
-
 let currentBucketStartMs = null;
 const inMemoryBuckets = new Map();
-let lastDiscordStatusBotState = null;
-let lastDiscordStatusBotAlertKind = null;
 
 function flushCurrentBucket() {
   if (!db) return;
@@ -795,9 +676,6 @@ async function refreshSnapshot() {
   const results = await Promise.all(SERVICES.map((service) => probeService(service)));
   const indicator = computeIndicator(results);
   recordSamples(results);
-  await notifyDiscordStatusBotState(
-    results.find((service) => service.id === DISCORD_STATUS_BOT_SERVICE_ID)
-  );
   process.stdout.write(
     `Snapshot refreshed: ${results.length} services, indicator=${indicator.indicator}\n`
   );
