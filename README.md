@@ -220,6 +220,23 @@ DISCORD_STATUS_BOT_DOWN_MESSAGE=Discord status bot server is down. Please restar
 DISCORD_STATUS_BOT_RECOVERY_MESSAGE=Discord status bot server is back online.
 ```
 
+The listener also exposes its own status endpoint from the status server process:
+
+```dotenv
+DISCORD_STATUS_LISTENER_HOST=127.0.0.1
+DISCORD_STATUS_LISTENER_PORT=4703
+DISCORD_STATUS_LISTENER_PATH=/discord/status-bot-check
+```
+
+Default local URL:
+
+```text
+http://127.0.0.1:4703/discord/status-bot-check
+```
+
+This endpoint reports the status server listener's last check of the Discord bot
+server without exposing the watched server URL.
+
 Run it under pm2 as a separate service:
 
 ```bash

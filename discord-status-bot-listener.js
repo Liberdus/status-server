@@ -51,9 +51,30 @@ const DOWN_MESSAGE =
 const RECOVERY_MESSAGE =
   process.env.DISCORD_STATUS_BOT_RECOVERY_MESSAGE ||
   "Discord status bot server is back online.";
+const LISTENER_STATUS_PORT =
+  Number.isFinite(Number(process.env.DISCORD_STATUS_LISTENER_PORT)) &&
+  Number(process.env.DISCORD_STATUS_LISTENER_PORT) > 0
+    ? Math.floor(Number(process.env.DISCORD_STATUS_LISTENER_PORT))
+    : 4703;
+const LISTENER_STATUS_HOST =
+  process.env.DISCORD_STATUS_LISTENER_HOST || "127.0.0.1";
+const LISTENER_STATUS_PATH =
+  process.env.DISCORD_STATUS_LISTENER_PATH || "/discord/status-bot-check";
 
 let lastAlertKind = null;
 let checkInFlight = false;
+let lastCheckSnapshot = {
+  service_name: "discord bot watchdog",
+  service_id: "discord-status-bot-listener",
+  watched_service_name: "discord bot",
+  watched_service_id: "status-discord-bot",
+  status: "unknown",
+  checkedAt: null,
+  detail: "No checks have run yet",
+  statusCode: null,
+  targetConfigured: Boolean(BOT_HEALTH_URL),
+  inFlight: false,
+};
 
 function httpStatusGet(targetUrl, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -158,18 +179,31 @@ async function sendTransitionAlert(nextKind, detail) {
       ? `${DOWN_MESSAGE}${detail ? ` Detail: ${detail}` : ""}`
       : RECOVERY_MESSAGE;
 
-  await postDiscordChannelMessage(
-    DISCORD_ALERT_CHANNEL_ID,
-    DISCORD_ALERT_BOT_TOKEN,
-    message
-  );
-  lastAlertKind = nextKind;
-  process.stdout.write(`Discord status bot listener ${nextKind} alert sent\n`);
+  try {
+    await postDiscordChannelMessage(
+      DISCORD_ALERT_CHANNEL_ID,
+      DISCORD_ALERT_BOT_TOKEN,
+      message
+    );
+    lastAlertKind = nextKind;
+    process.stdout.write(`Discord status bot listener ${nextKind} alert sent\n`);
+  } catch (error) {
+    process.stdout.write(
+      `Discord status bot listener alert failed: ${
+        error && error.message ? error.message : String(error)
+      }\n`
+    );
+  }
 }
 
 async function checkBotServer() {
   if (checkInFlight) return;
   checkInFlight = true;
+  lastCheckSnapshot = {
+    ...lastCheckSnapshot,
+    inFlight: true,
+    targetConfigured: Boolean(BOT_HEALTH_URL),
+  };
   try {
     if (!BOT_HEALTH_URL) {
       throw new Error("Missing SVC_DISCORD_STATUS_BOT_URL");
@@ -179,17 +213,69 @@ async function checkBotServer() {
       throw new Error(`HTTP status ${result.statusCode}`);
     }
     await sendTransitionAlert("up");
+    lastCheckSnapshot = {
+      ...lastCheckSnapshot,
+      status: "healthy",
+      checkedAt: new Date().toISOString(),
+      detail: null,
+      statusCode: result.statusCode,
+      targetConfigured: true,
+      inFlight: false,
+      lastAlertKind,
+    };
     process.stdout.write(
       `Discord status bot listener check ok: ${result.statusCode}\n`
     );
   } catch (error) {
     const detail = error && error.message ? error.message : String(error);
     await sendTransitionAlert("down", detail);
+    lastCheckSnapshot = {
+      ...lastCheckSnapshot,
+      status: "outage",
+      checkedAt: new Date().toISOString(),
+      detail,
+      statusCode: null,
+      targetConfigured: Boolean(BOT_HEALTH_URL),
+      inFlight: false,
+      lastAlertKind,
+    };
     process.stdout.write(`Discord status bot listener check failed: ${detail}\n`);
   } finally {
     checkInFlight = false;
+    lastCheckSnapshot = {
+      ...lastCheckSnapshot,
+      inFlight: false,
+      lastAlertKind,
+    };
   }
 }
+
+const statusServer = http.createServer((req, res) => {
+  const requestPath = req.url ? req.url.split("?")[0] : "";
+  if (req.method !== "GET" || requestPath !== LISTENER_STATUS_PATH) {
+    res.statusCode = 404;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({ status: "not_found" }));
+    return;
+  }
+  res.statusCode = lastCheckSnapshot.status === "healthy" ? 200 : 503;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(lastCheckSnapshot));
+});
+
+statusServer.on("error", (error) => {
+  process.stdout.write(
+    `Discord status bot listener status endpoint error: ${
+      error && error.message ? error.message : String(error)
+    }\n`
+  );
+});
+
+statusServer.listen(LISTENER_STATUS_PORT, LISTENER_STATUS_HOST, () => {
+  process.stdout.write(
+    `Discord status bot listener endpoint listening on http://${LISTENER_STATUS_HOST}:${LISTENER_STATUS_PORT}${LISTENER_STATUS_PATH}\n`
+  );
+});
 
 process.stdout.write(
   `Discord status bot listener starting; interval=${CHECK_INTERVAL_MS}ms\n`
