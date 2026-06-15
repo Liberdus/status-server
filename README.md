@@ -201,7 +201,7 @@ status server host and posts to Discord if the bot server is down.
 By default, the listener checks:
 
 ```text
-http://198.96.88.75:4702/health
+http://198.96.88.75:4702/discord/health
 ```
 
 Override `SVC_DISCORD_STATUS_BOT_URL` only if the bot server health route changes.

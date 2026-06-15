@@ -25,7 +25,7 @@ function loadEnvFile(filePath) {
 
 loadEnvFile(path.join(__dirname, ".env"));
 
-const DEFAULT_BOT_HEALTH_URL = "http://198.96.88.75:4702/health";
+const DEFAULT_BOT_HEALTH_URL = "http://198.96.88.75:4702/discord/health";
 const BOT_HEALTH_URL =
   process.env.SVC_DISCORD_STATUS_BOT_URL || DEFAULT_BOT_HEALTH_URL;
 const DISCORD_ALERT_CHANNEL_ID =
