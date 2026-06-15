@@ -25,7 +25,9 @@ function loadEnvFile(filePath) {
 
 loadEnvFile(path.join(__dirname, ".env"));
 
-const BOT_HEALTH_URL = process.env.SVC_DISCORD_STATUS_BOT_URL || null;
+const DEFAULT_BOT_HEALTH_URL = "http://198.96.88.75:4702/health";
+const BOT_HEALTH_URL =
+  process.env.SVC_DISCORD_STATUS_BOT_URL || DEFAULT_BOT_HEALTH_URL;
 const DISCORD_ALERT_CHANNEL_ID =
   process.env.DISCORD_STATUS_ALERT_CHANNEL_ID ||
   process.env.STATUS_DISCORD_ALERT_CHANNEL_ID ||
@@ -171,9 +173,6 @@ async function checkBotServer() {
   if (checkInFlight) return;
   checkInFlight = true;
   try {
-    if (!BOT_HEALTH_URL) {
-      throw new Error("Missing SVC_DISCORD_STATUS_BOT_URL");
-    }
     const result = await httpStatusGet(BOT_HEALTH_URL, REQUEST_TIMEOUT_MS);
     if (result.statusCode < 200 || result.statusCode >= 400) {
       throw new Error(`HTTP status ${result.statusCode}`);

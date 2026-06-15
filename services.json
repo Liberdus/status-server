@@ -104,6 +104,7 @@
     "network": "testnet",
     "group": "Testnet",
     "urlEnv": "SVC_DISCORD_STATUS_BOT_URL",
+    "url": "http://198.96.88.75:4702/health",
     "checker": "httpOk"
   },
   {
