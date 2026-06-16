@@ -237,6 +237,16 @@ http://127.0.0.1:4703/discord/status-bot-check
 This endpoint reports the status server listener's last check of the Discord bot
 server without exposing the watched server URL.
 
+The main status backend also proxies that local listener snapshot at:
+
+```text
+https://status.liberdus.com/api/discord-bot-status
+```
+
+That public API is what the Discord `/status bothealth` command reads. It
+returns the status-server watchdog snapshot and does not include the watched bot
+server URL.
+
 Run it under pm2 as a separate service:
 
 ```bash

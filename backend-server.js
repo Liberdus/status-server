@@ -48,6 +48,16 @@ try {
 }
 
 const PORT = process.env.PORT || 443;
+const DISCORD_STATUS_LISTENER_HOST =
+  process.env.DISCORD_STATUS_LISTENER_HOST || "127.0.0.1";
+const DISCORD_STATUS_LISTENER_PORT =
+  Number.isFinite(Number(process.env.DISCORD_STATUS_LISTENER_PORT)) &&
+  Number(process.env.DISCORD_STATUS_LISTENER_PORT) > 0
+    ? Math.floor(Number(process.env.DISCORD_STATUS_LISTENER_PORT))
+    : 4703;
+const DISCORD_STATUS_LISTENER_PATH =
+  process.env.DISCORD_STATUS_LISTENER_PATH || "/discord/status-bot-check";
+const DISCORD_STATUS_LISTENER_URL = `http://${DISCORD_STATUS_LISTENER_HOST}:${DISCORD_STATUS_LISTENER_PORT}${DISCORD_STATUS_LISTENER_PATH}`;
 
 let SERVICES = [];
 try {
@@ -763,6 +773,38 @@ const server = http.createServer((req, res) => {
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.end(JSON.stringify(payload));
+    return;
+  }
+  if (req.method === "GET" && req.url === "/api/discord-bot-status") {
+    httpJsonGet(DISCORD_STATUS_LISTENER_URL, 5000)
+      .then((result) => {
+        res.statusCode =
+          result.statusCode >= 200 && result.statusCode < 300 ? 200 : 503;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.end(JSON.stringify(result.json));
+      })
+      .catch((error) => {
+        res.statusCode = 503;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.end(
+          JSON.stringify({
+            service_name: "discord bot watchdog",
+            service_id: "discord-status-bot-listener",
+            watched_service_name: "discord bot",
+            watched_service_id: "status-discord-bot",
+            status: "outage",
+            checkedAt: new Date().toISOString(),
+            detail: `Status server could not read local listener: ${
+              error && error.message ? error.message : String(error)
+            }`,
+            statusCode: null,
+            targetConfigured: false,
+            inFlight: false,
+          })
+        );
+      });
     return;
   }
   if (req.method === "GET" && req.url === "/health") {
