@@ -198,9 +198,9 @@ The backend follows these rules for each probe:
 Run `discord-status-bot-listener.js` as its own process, separate from
 `backend-server.js`. This process watches the Discord status bot server from the
 status server host and posts to Discord if the bot server is down. It also logs
-in as a small failsafe Discord client that answers `/status bothealth` directly
-from the status server watchdog snapshot, so that command can still work when
-the watched Discord bot server is down.
+in as a small failsafe Discord client that answers `/bothealth` directly from
+the status server watchdog snapshot, so that command can still work when the
+watched Discord bot server is down.
 
 Configure `SVC_DISCORD_STATUS_BOT_URL` with the bot server health route. When the
 listener sees that route change from healthy to down, it sends a Discord message
@@ -248,9 +248,8 @@ https://status.liberdus.com/api/discord-bot-status
 ```
 
 That public API returns the same status-server watchdog snapshot and does not
-include the watched bot server URL. The Discord `/status bothealth` command is
-answered directly by the status-server listener process from the same in-memory
-snapshot.
+include the watched bot server URL. The Discord `/bothealth` command is answered
+directly by the status-server listener process from the same in-memory snapshot.
 
 Run it under pm2 as a separate service:
 
@@ -265,9 +264,10 @@ the web dashboard shows its state, but Discord alerting runs in the separate
 listener process.
 
 The failsafe Discord command listener uses the same bot token as the normal
-Discord status bot. It registers the same `/status` command shape to avoid
-removing the normal bot's other subcommands, but it only answers the
-`/status bothealth` subcommand.
+Discord status bot. It registers `/bothealth` as the reliable failsafe command
+because the normal bot server ignores that top-level command. It also keeps the
+same `/status` command shape for compatibility and only answers the
+`/status bothealth` subcommand from that tree.
 
 When the backend stores history, it converts `healthPct` into a daily/bucketed state using these thresholds:
 

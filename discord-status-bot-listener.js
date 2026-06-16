@@ -206,6 +206,13 @@ function buildStatusCommandDefinition() {
   };
 }
 
+function buildBotHealthCommandDefinition() {
+  return {
+    name: "bothealth",
+    description: "Show the Discord bot watchdog status from the Status server",
+  };
+}
+
 function formatBotHealthResponse(snapshot) {
   const data = snapshot && typeof snapshot === "object" ? snapshot : {};
   const lines = [
@@ -399,7 +406,10 @@ async function checkBotServer() {
 }
 
 async function registerStatusCommand(client) {
-  const command = buildStatusCommandDefinition();
+  const commands = [
+    buildStatusCommandDefinition(),
+    buildBotHealthCommandDefinition(),
+  ];
   try {
     const guilds = await client.guilds.fetch();
     const entries = Array.from(guilds.values());
@@ -407,7 +417,7 @@ async function registerStatusCommand(client) {
     for (const g of entries) {
       try {
         const guild = await client.guilds.fetch(g.id);
-        await guild.commands.set([command]);
+        await guild.commands.set(commands);
         okCount += 1;
       } catch (error) {}
     }
@@ -475,12 +485,16 @@ function startDiscordCommandListener() {
   client.on("interactionCreate", async (interaction) => {
     try {
       if (!interaction || !interaction.isChatInputCommand()) return;
-      if (interaction.commandName !== "status") return;
-      const sub = interaction.options.getSubcommand();
-      if (sub !== "bothealth") return;
-      await interaction.reply({
+      if (interaction.commandName === "status") {
+        const sub = interaction.options.getSubcommand();
+        if (sub !== "bothealth") return;
+      } else if (interaction.commandName !== "bothealth") {
+        return;
+      }
+
+      await interaction.deferReply({ flags: EPHEMERAL_FLAGS });
+      await interaction.editReply({
         content: formatBotHealthResponse(lastCheckSnapshot),
-        flags: EPHEMERAL_FLAGS,
       });
     } catch (error) {
       process.stdout.write(
