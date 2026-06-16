@@ -247,9 +247,10 @@ The main status backend also proxies that local listener snapshot at:
 https://status.liberdus.com/api/discord-bot-status
 ```
 
-That public API is what the Discord `/status bothealth` command reads. It
-returns the status-server watchdog snapshot and does not include the watched bot
-server URL.
+That public API returns the same status-server watchdog snapshot and does not
+include the watched bot server URL. The Discord `/status bothealth` command is
+answered directly by the status-server listener process from the same in-memory
+snapshot.
 
 Run it under pm2 as a separate service:
 
