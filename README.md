@@ -197,7 +197,10 @@ The backend follows these rules for each probe:
 
 Run `discord-status-bot-listener.js` as its own process, separate from
 `backend-server.js`. This process watches the Discord status bot server from the
-status server host and posts to Discord if the bot server is down.
+status server host and posts to Discord if the bot server is down. It also logs
+in as a small failsafe Discord client that answers `/status bothealth` directly
+from the status server watchdog snapshot, so that command can still work when
+the watched Discord bot server is down.
 
 Configure `SVC_DISCORD_STATUS_BOT_URL` with the bot server health route. When the
 listener sees that route change from healthy to down, it sends a Discord message
@@ -218,6 +221,7 @@ Optional message overrides:
 ```dotenv
 DISCORD_STATUS_BOT_DOWN_MESSAGE=Discord status bot server is down. Please restart it.
 DISCORD_STATUS_BOT_RECOVERY_MESSAGE=Discord status bot server is back online.
+DISCORD_STATUS_COMMAND_LISTENER=true
 ```
 
 The listener also exposes its own status endpoint from the status server process:
@@ -250,6 +254,7 @@ server URL.
 Run it under pm2 as a separate service:
 
 ```bash
+npm install discord.js
 pm2 start discord-status-bot-listener.js --name liberdus-status-bot-listener
 pm2 save
 ```
@@ -257,6 +262,11 @@ pm2 save
 The status backend can still include `discord-status-bot` in `services.json` so
 the web dashboard shows its state, but Discord alerting runs in the separate
 listener process.
+
+The failsafe Discord command listener uses the same bot token as the normal
+Discord status bot. It registers the same `/status` command shape to avoid
+removing the normal bot's other subcommands, but it only answers the
+`/status bothealth` subcommand.
 
 When the backend stores history, it converts `healthPct` into a daily/bucketed state using these thresholds:
 
