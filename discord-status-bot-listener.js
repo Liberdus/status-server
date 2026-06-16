@@ -39,6 +39,11 @@ const ENABLE_DISCORD_COMMAND_LISTENER =
   String(process.env.DISCORD_STATUS_COMMAND_LISTENER || "true").toLowerCase() !==
   "false";
 const EPHEMERAL_FLAGS = 64;
+const COMMAND_REGISTER_INTERVAL_MS =
+  Number.isFinite(Number(process.env.DISCORD_STATUS_COMMAND_REGISTER_INTERVAL_MS)) &&
+  Number(process.env.DISCORD_STATUS_COMMAND_REGISTER_INTERVAL_MS) > 0
+    ? Math.floor(Number(process.env.DISCORD_STATUS_COMMAND_REGISTER_INTERVAL_MS))
+    : 60000;
 const CHECK_INTERVAL_MS =
   Number.isFinite(Number(process.env.DISCORD_STATUS_BOT_CHECK_INTERVAL_MS)) &&
   Number(process.env.DISCORD_STATUS_BOT_CHECK_INTERVAL_MS) > 0
@@ -79,132 +84,6 @@ let lastCheckSnapshot = {
   targetConfigured: Boolean(BOT_HEALTH_URL),
   inFlight: false,
 };
-
-function buildStatusCommandDefinition() {
-  return {
-    name: "status",
-    description: "Status notifier commands",
-    options: [
-      {
-        type: 1,
-        name: "help",
-        description: "Show help",
-      },
-      {
-        type: 1,
-        name: "config",
-        description: "Show current configuration",
-      },
-      {
-        type: 1,
-        name: "setchannel",
-        description: "Set the channel to post alerts/reports",
-        options: [
-          {
-            type: 7,
-            name: "channel",
-            description: "Target channel",
-            required: true,
-          },
-        ],
-      },
-      {
-        type: 1,
-        name: "setserverurl",
-        description: "Set the Status backend base URL",
-        options: [
-          {
-            type: 3,
-            name: "url",
-            description: "Example: http://host:3001",
-            required: true,
-          },
-        ],
-      },
-      {
-        type: 1,
-        name: "setnetwork",
-        description: "Set the network query param",
-        options: [
-          {
-            type: 3,
-            name: "network",
-            description: "Example: testnet",
-            required: true,
-          },
-        ],
-      },
-      {
-        type: 1,
-        name: "setinterval",
-        description: "Set report interval",
-        options: [
-          {
-            type: 3,
-            name: "interval",
-            description: "5m, 10m, 20m, 30m, 1h, 1d, off",
-            required: true,
-            choices: [
-              { name: "5m", value: "5m" },
-              { name: "10m", value: "10m" },
-              { name: "20m", value: "20m" },
-              { name: "30m", value: "30m" },
-              { name: "1h", value: "1h" },
-              { name: "1d", value: "1d" },
-              { name: "off", value: "off" },
-            ],
-          },
-        ],
-      },
-      {
-        type: 1,
-        name: "notifychanges",
-        description: "Toggle per-service status change messages",
-        options: [
-          {
-            type: 5,
-            name: "enabled",
-            description: "true/false",
-            required: true,
-          },
-        ],
-      },
-      {
-        type: 1,
-        name: "reportdownonly",
-        description: "Only send scheduled cards when down or degraded",
-        options: [
-          {
-            type: 5,
-            name: "enabled",
-            description: "true/false",
-            required: true,
-          },
-        ],
-      },
-      {
-        type: 1,
-        name: "enable",
-        description: "Enable monitoring",
-      },
-      {
-        type: 1,
-        name: "disable",
-        description: "Disable monitoring",
-      },
-      {
-        type: 1,
-        name: "reportnow",
-        description: "Post a status card now",
-      },
-      {
-        type: 1,
-        name: "bothealth",
-        description: "Show the Discord bot watchdog status from the Status server",
-      },
-    ],
-  };
-}
 
 function buildBotHealthCommandDefinition() {
   return {
@@ -405,11 +284,8 @@ async function checkBotServer() {
   }
 }
 
-async function registerStatusCommand(client) {
-  const commands = [
-    buildStatusCommandDefinition(),
-    buildBotHealthCommandDefinition(),
-  ];
+async function registerBotHealthCommand(client) {
+  const command = buildBotHealthCommandDefinition();
   try {
     const guilds = await client.guilds.fetch();
     const entries = Array.from(guilds.values());
@@ -417,12 +293,18 @@ async function registerStatusCommand(client) {
     for (const g of entries) {
       try {
         const guild = await client.guilds.fetch(g.id);
-        await guild.commands.set(commands);
+        const commands = await guild.commands.fetch();
+        const existing = commands.find((item) => item.name === command.name);
+        if (existing) {
+          await guild.commands.edit(existing.id, command);
+        } else {
+          await guild.commands.create(command);
+        }
         okCount += 1;
       } catch (error) {}
     }
     process.stdout.write(
-      `Discord status bot watchdog command registered in ${okCount}/${entries.length} guild(s)\n`
+      `Discord status bot watchdog /bothealth command upserted in ${okCount}/${entries.length} guild(s)\n`
     );
   } catch (error) {
     process.stdout.write(
@@ -458,22 +340,34 @@ function startDiscordCommandListener() {
   const client = new discord.Client({
     intents: [discord.GatewayIntentBits.Guilds],
   });
+  let commandRegistrationTimer = null;
 
   client.on("ready", () => {
     process.stdout.write(
       `Discord status bot watchdog logged in as ${client.user.tag}\n`
     );
-    registerStatusCommand(client).catch((error) => {
+    registerBotHealthCommand(client).catch((error) => {
       process.stdout.write(
         `Discord status bot watchdog command registration error: ${
           error && error.message ? error.message : String(error)
         }\n`
       );
     });
+    if (!commandRegistrationTimer) {
+      commandRegistrationTimer = setInterval(() => {
+        registerBotHealthCommand(client).catch((error) => {
+          process.stdout.write(
+            `Discord status bot watchdog command refresh error: ${
+              error && error.message ? error.message : String(error)
+            }\n`
+          );
+        });
+      }, COMMAND_REGISTER_INTERVAL_MS);
+    }
   });
 
   client.on("guildCreate", () => {
-    registerStatusCommand(client).catch((error) => {
+    registerBotHealthCommand(client).catch((error) => {
       process.stdout.write(
         `Discord status bot watchdog guild command registration error: ${
           error && error.message ? error.message : String(error)

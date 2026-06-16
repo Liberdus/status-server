@@ -222,6 +222,7 @@ Optional message overrides:
 DISCORD_STATUS_BOT_DOWN_MESSAGE=Discord status bot server is down. Please restart it.
 DISCORD_STATUS_BOT_RECOVERY_MESSAGE=Discord status bot server is back online.
 DISCORD_STATUS_COMMAND_LISTENER=true
+DISCORD_STATUS_COMMAND_REGISTER_INTERVAL_MS=60000
 ```
 
 The listener also exposes its own status endpoint from the status server process:
@@ -265,9 +266,10 @@ listener process.
 
 The failsafe Discord command listener uses the same bot token as the normal
 Discord status bot. It registers `/bothealth` as the reliable failsafe command
-because the normal bot server ignores that top-level command. It also keeps the
-same `/status` command shape for compatibility and only answers the
-`/status bothealth` subcommand from that tree.
+because the normal bot server ignores that top-level command. It only upserts
+that one command and does not replace the normal bot's `/status` command tree.
+If the normal bot server restarts and removes `/bothealth`, the status server
+refreshes the command on the next registration interval.
 
 When the backend stores history, it converts `healthPct` into a daily/bucketed state using these thresholds:
 
