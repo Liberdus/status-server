@@ -539,24 +539,27 @@ async function refreshSnapshot() {
   };
 }
 
-refreshSnapshot().catch((error) => {
-  process.stdout.write(
-    `Initial snapshot refresh error: ${error && error.message ? error.message : String(
-      error
-    )}\n`
-  );
-});
-setInterval(() => {
+function startSnapshotRefresh() {
   refreshSnapshot().catch((error) => {
     process.stdout.write(
-      `Periodic snapshot refresh error: ${error && error.message ? error.message : String(
+      `Initial snapshot refresh error: ${error && error.message ? error.message : String(
         error
       )}\n`
     );
   });
-}, 300000);
+  return setInterval(() => {
+    refreshSnapshot().catch((error) => {
+      process.stdout.write(
+        `Periodic snapshot refresh error: ${error && error.message ? error.message : String(
+          error
+        )}\n`
+      );
+    });
+  }, 300000);
+}
 
-const server = http.createServer((req, res) => {
+function createStatusServer(options = {}) {
+  return http.createServer((req, res) => {
   if (req.method === "GET" && (req.url === "/" || req.url === "")) {
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
