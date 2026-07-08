@@ -129,6 +129,76 @@ function httpJsonGet(targetUrl, timeoutMs) {
   });
 }
 
+function httpJsonPost(targetUrl, payload, token, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const body = JSON.stringify(payload);
+    const urlObj = new URL(targetUrl);
+    const isHttps = urlObj.protocol === "https:";
+    const transport = isHttps ? https : http;
+    const options = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      port: urlObj.port || (isHttps ? 443 : 80),
+      method: "POST",
+      timeout: timeoutMs,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+        Authorization: `Bearer ${token}`,
+      },
+    };
+    const req = transport.request(options, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        if (settled) return;
+        settled = true;
+        resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString("utf8") });
+      });
+    });
+    req.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    req.on("timeout", () => {
+      if (settled) return;
+      settled = true;
+      req.destroy(new Error("Request timeout"));
+    });
+    req.end(body);
+  });
+}
+
+function readJsonBody(req, maxBytes, callback) {
+  const chunks = [];
+  let size = 0;
+  req.on("data", (chunk) => {
+    size += chunk.length;
+    if (size > maxBytes) {
+      req.destroy(new Error("Request body too large"));
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on("end", () => {
+    try {
+      callback(null, JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    } catch (error) {
+      callback(error, null);
+    }
+  });
+  req.on("error", (error) => callback(error, null));
+}
+
+function sendJson(res, statusCode, payload) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.end(JSON.stringify(payload));
+}
+
 function checkByStatusEquals(service, payload) {
   const { json } = payload;
   const value = json && typeof json === "object" ? json.status : undefined;
