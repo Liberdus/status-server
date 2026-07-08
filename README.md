@@ -350,3 +350,20 @@ Categories in the frontend are inferred from service names:
 
 - Names containing `"gateway"`, `"archiver"`, `"explorer"`, `"monitor"`, `"notification"`, `"faucet"`, `"oauth"`, or `"golden"` are grouped under the matching category (Gateways, Archivers, Explorers, Monitors, Notification, Faucet, OAuth, Golden Ticket).
 - If a service name does not contain any of these keywords, it is ignored for category-level grouping but still counted for the overall status.
+
+## TSS provider health alerts
+
+The backend can receive event-driven warning/emergency provider health alerts from `tss-signer`, store the latest accepted snapshot in memory, and immediately forward valid events to `Status-discord-bot`.
+
+```dotenv
+TSS_PROVIDER_ALERT_TOKEN=shared-secret
+DISCORD_BOT_ALERT_URL=http://discord-bot-host:6970
+STATUS_TO_BOT_ALERT_TOKEN=shared-secret-2
+```
+
+Endpoints:
+
+- `POST /api/tss-provider-health/alert` with `Authorization: Bearer ${TSS_PROVIDER_ALERT_TOKEN}`
+- `GET /api/tss-provider-health/latest`
+
+Provider names that look like URLs or query strings are rejected so raw RPC URLs and API keys are not stored or forwarded.
