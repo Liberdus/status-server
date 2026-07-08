@@ -368,6 +368,145 @@ let latestSnapshot = {
   statusDescription: "Unknown",
 };
 
+let latestTssProviderHealthAlert = null;
+
+function getBearerToken(req) {
+  const header = req.headers.authorization || "";
+  const match = /^Bearer\s+(.+)$/i.exec(String(header));
+  return match ? match[1] : null;
+}
+
+function providerNameLooksUnsafe(value) {
+  if (typeof value !== "string") return true;
+  if (value.trim() !== value || value.length === 0 || value.length > 80) return true;
+  return /(https?:\/\/|www\.|[?&][a-z0-9_-]+=|\/{2,}|[a-z0-9.-]+\.[a-z]{2,}\/)/i.test(value);
+}
+
+function validateTssProviderAlertPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, error: "Payload must be an object" };
+  }
+  if (payload.source !== "tss-signer") {
+    return { ok: false, error: "Invalid source" };
+  }
+  if (typeof payload.instanceId !== "string" || payload.instanceId.length === 0) {
+    return { ok: false, error: "Missing instanceId" };
+  }
+  if (typeof payload.hostname !== "string" || payload.hostname.length === 0) {
+    return { ok: false, error: "Missing hostname" };
+  }
+  if (typeof payload.generatedAt !== "string" || Number.isNaN(Date.parse(payload.generatedAt))) {
+    return { ok: false, error: "Invalid generatedAt" };
+  }
+  if (!Array.isArray(payload.chains) || payload.chains.length === 0) {
+    return { ok: false, error: "Missing chains" };
+  }
+
+  const sanitizedChains = [];
+  for (const chain of payload.chains) {
+    if (!chain || typeof chain !== "object") {
+      return { ok: false, error: "Invalid chain" };
+    }
+    const severity = chain.severity;
+    if (severity !== "warning" && severity !== "emergency") {
+      return { ok: false, error: "Invalid severity" };
+    }
+    const numbers = [
+      chain.chainId,
+      chain.totalProviderCount,
+      chain.activeProviderCount,
+      chain.activeProviderPercentage,
+    ];
+    if (!numbers.every((n) => Number.isFinite(n))) {
+      return { ok: false, error: "Invalid counts" };
+    }
+    if (
+      chain.totalProviderCount < 0 ||
+      chain.activeProviderCount < 0 ||
+      chain.activeProviderCount > chain.totalProviderCount ||
+      chain.activeProviderPercentage < 0 ||
+      chain.activeProviderPercentage > 100
+    ) {
+      return { ok: false, error: "Invalid counts" };
+    }
+    if (!Array.isArray(chain.failedProviders)) {
+      return { ok: false, error: "Invalid failedProviders" };
+    }
+    for (const provider of chain.failedProviders) {
+      if (providerNameLooksUnsafe(provider)) {
+        return { ok: false, error: "Unsafe provider name" };
+      }
+    }
+    sanitizedChains.push({
+      chainId: Math.floor(chain.chainId),
+      chainName: typeof chain.chainName === "string" && chain.chainName.length > 0 ? chain.chainName.slice(0, 120) : `chain-${chain.chainId}`,
+      totalProviderCount: Math.floor(chain.totalProviderCount),
+      activeProviderCount: Math.floor(chain.activeProviderCount),
+      activeProviderPercentage: Math.round(chain.activeProviderPercentage),
+      severity,
+      failedProviders: chain.failedProviders.map((p) => String(p)),
+    });
+  }
+
+  return {
+    ok: true,
+    payload: {
+      source: "tss-signer",
+      instanceId: String(payload.instanceId).slice(0, 120),
+      hostname: String(payload.hostname).slice(0, 120),
+      hostIp: typeof payload.hostIp === "string" && payload.hostIp.length > 0 ? payload.hostIp.slice(0, 80) : undefined,
+      environment: typeof payload.environment === "string" && payload.environment.length > 0 ? payload.environment.slice(0, 80) : undefined,
+      generatedAt: payload.generatedAt,
+      chains: sanitizedChains,
+    },
+  };
+}
+
+async function handleTssProviderAlert(req, res, options) {
+  const expectedToken = options.tssProviderAlertToken || process.env.TSS_PROVIDER_ALERT_TOKEN;
+  if (!expectedToken || getBearerToken(req) !== expectedToken) {
+    sendJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+
+  readJsonBody(req, 128 * 1024, async (error, body) => {
+    if (error) {
+      sendJson(res, 400, { error: "Malformed JSON" });
+      return;
+    }
+    const validation = validateTssProviderAlertPayload(body);
+    if (!validation.ok) {
+      sendJson(res, 400, { error: validation.error });
+      return;
+    }
+
+    latestTssProviderHealthAlert = validation.payload;
+
+    const botUrl = options.discordBotAlertUrl || process.env.DISCORD_BOT_ALERT_URL;
+    const botToken = options.statusToBotAlertToken || process.env.STATUS_TO_BOT_ALERT_TOKEN;
+    if (!botUrl || !botToken) {
+      sendJson(res, 202, { ok: true, forwarded: false });
+      return;
+    }
+
+    try {
+      const target = `${botUrl.replace(/\/+$/, "")}/internal/tss-provider-health-alert`;
+      const forwardResult = await httpJsonPost(target, validation.payload, botToken, 10000);
+      if (forwardResult.statusCode < 200 || forwardResult.statusCode >= 300) {
+        process.stdout.write(`TSS provider alert forward failed with HTTP ${forwardResult.statusCode}\n`);
+        sendJson(res, 502, { ok: false, error: "Forwarding failed" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, forwarded: true });
+    } catch (forwardError) {
+      process.stdout.write(
+        `TSS provider alert forward error: ${forwardError && forwardError.message ? forwardError.message : String(forwardError)}\n`
+      );
+      sendJson(res, 502, { ok: false, error: "Forwarding failed" });
+    }
+  });
+}
+
 function resolveIntervalMinutes(raw) {
   if (!raw || typeof raw !== "string") return 1440;
   const value = raw.toLowerCase();
