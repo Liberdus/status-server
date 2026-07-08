@@ -771,12 +771,35 @@ function createStatusServer(options = {}) {
     );
     return;
   }
+  if (req.method === "GET" && req.url === "/api/tss-provider-health/latest") {
+    sendJson(res, 200, latestTssProviderHealthAlert || { generatedAt: null, chains: [] });
+    return;
+  }
+  if (req.method === "POST" && req.url === "/api/tss-provider-health/alert") {
+    void handleTssProviderAlert(req, res, options);
+    return;
+  }
   res.statusCode = 404;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.end(JSON.stringify({ error: "Not found" }));
-});
+  });
+}
 
-server.listen(PORT, () => {
-  process.stdout.write(`Status backend listening on http://localhost:${PORT}\n`);
-});
+if (require.main === module) {
+  startSnapshotRefresh();
+  const server = createStatusServer();
+  server.listen(PORT, () => {
+    process.stdout.write(`Status backend listening on http://localhost:${PORT}\n`);
+  });
+}
+
+module.exports = {
+  createStatusServer,
+  validateTssProviderAlertPayload,
+  providerNameLooksUnsafe,
+  getLatestTssProviderHealthAlert: () => latestTssProviderHealthAlert,
+  resetLatestTssProviderHealthAlert: () => {
+    latestTssProviderHealthAlert = null;
+  },
+};
