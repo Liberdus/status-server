@@ -3,6 +3,7 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
+const { createTssHealthPoller } = require("./tss-health");
 
 function loadEnvFile(filePath) {
   try {
@@ -94,6 +95,19 @@ try {
 } catch (error) {
   SERVICES = [];
 }
+
+let TSS_OBSERVERS = [];
+try {
+  // Deployment-specific observer addresses may be supplied without placing
+  // credentials or provider details in this repository. The JSON file remains
+  // the convenient local configuration fallback.
+  const configured = process.env.TSS_OBSERVERS_JSON;
+  const raw = configured || fs.readFileSync(path.join(__dirname, "tss-observers.json"), "utf8");
+  TSS_OBSERVERS = JSON.parse(raw);
+} catch (error) {
+  process.stdout.write("TSS observer configuration unavailable; TSS polling disabled\n");
+}
+const tssHealthPoller = createTssHealthPoller(TSS_OBSERVERS);
 
 function httpJsonGet(targetUrl, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -714,6 +728,15 @@ setInterval(() => {
   });
 }, PROBE_INTERVAL_MS);
 
+tssHealthPoller.pollAll().catch((error) => {
+  process.stdout.write(`Initial TSS health poll failed: ${error && error.message ? error.message : "poll failed"}\n`);
+});
+setInterval(() => {
+  tssHealthPoller.pollAll().catch((error) => {
+    process.stdout.write(`Periodic TSS health poll failed: ${error && error.message ? error.message : "poll failed"}\n`);
+  });
+}, tssHealthPoller.intervalMs);
+
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && (req.url === "/" || req.url === "")) {
     res.statusCode = 200;
@@ -805,6 +828,20 @@ const server = http.createServer((req, res) => {
           })
         );
       });
+    return;
+  }
+  if (req.method === "GET" && req.url && req.url.startsWith("/api/tss-health")) {
+    const fullUrl = new URL(req.url, `http://localhost:${PORT}`);
+    const network = fullUrl.searchParams.get("network");
+    const snapshot = tssHealthPoller.getSnapshot();
+    const payload = {
+      generatedAt: snapshot.generatedAt,
+      results: network ? snapshot.results.filter((result) => result.network === network) : snapshot.results,
+    };
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.end(JSON.stringify(payload));
     return;
   }
   if (req.method === "GET" && req.url === "/health") {
