@@ -1,7 +1,7 @@
 const assert = require("assert/strict");
 const { createTssHealthPoller, MAX_ATTEMPTS, REQUEST_TIMEOUT_MS } = require("./tss-health");
 
-const observer = { id: "signer-1", label: "Signer One", network: "testnet", baseUrl: "http://secret-host.invalid" };
+const observer = { id: "signer-1", label: "Signer One", network: "testnet", baseUrl: "http://203.0.113.10:8080" };
 const healthy = { status: "healthy", observer: { healthy: true }, tssParty: { healthy: true } };
 const empty = { checkedAt: "2026-07-20T00:00:00.000Z", failedProviderCount: 0, failedProviders: [] };
 
@@ -20,6 +20,7 @@ async function run() {
   const unchanged = await poller.pollAll(new Date("2026-07-21T01:00:00Z"));
   assert.equal(unchanged.results[0].type, "provider-health-error");
   assert.equal(unchanged.results[0].reason, "file-not-updated");
+  assert.equal(unchanged.results[0].observerAddress, "203.0.113.10");
 
   responses.set("/provider-health", {
     checkedAt: "2026-07-21T00:00:00.000Z",
@@ -28,7 +29,7 @@ async function run() {
   });
   const failed = await poller.pollAll(new Date("2026-07-22T01:00:00Z"));
   assert.equal(failed.results[0].type, "provider-health-result");
-  assert.equal(JSON.stringify(failed).includes("secret-host"), false);
+  assert.equal(JSON.stringify(failed).includes("203.0.113.10"), true);
 
   let attempts = 0;
   const unreachable = createTssHealthPoller([observer], {

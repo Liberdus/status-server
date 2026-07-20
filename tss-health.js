@@ -96,10 +96,12 @@ async function fetchWithRetries(observer, endpoint, options = {}) {
 }
 
 function resultBase(observer, type, identity, observedAt) {
+  const observerAddress = new URL(observer.baseUrl).hostname;
   return {
     id: `${observer.id}:${type}:${identity}`,
     observerId: observer.id,
     label: observer.label,
+    observerAddress,
     network: observer.network,
     type,
     observedAt,
