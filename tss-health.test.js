@@ -6,6 +6,8 @@ const healthy = { status: "healthy", observer: { healthy: true }, tssParty: { he
 const empty = { checkedAt: "2026-07-20T00:00:00.000Z", failedProviderCount: 0, failedProviders: [] };
 
 async function run() {
+  assert.throws(() => createTssHealthPoller([]), /at least one observer/);
+  assert.throws(() => createTssHealthPoller([{ id: "broken" }]), /every entry requires/);
   let calls = 0;
   const logs = [];
   const responses = new Map([["/health", healthy], ["/provider-health", empty]]);

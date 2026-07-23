@@ -96,16 +96,16 @@ try {
   SERVICES = [];
 }
 
-let TSS_OBSERVERS = [];
+// Deployment-specific observer addresses may be supplied without placing
+// credentials or provider details in this repository. This is deliberately
+// fail-closed: silently running with no observers would suppress all TSS alerts.
+const configuredTssObservers = process.env.TSS_OBSERVERS_JSON;
+const tssObserversRaw = configuredTssObservers || fs.readFileSync(path.join(__dirname, "tss-observers.json"), "utf8");
+let TSS_OBSERVERS;
 try {
-  // Deployment-specific observer addresses may be supplied without placing
-  // credentials or provider details in this repository. The JSON file remains
-  // the convenient local configuration fallback.
-  const configured = process.env.TSS_OBSERVERS_JSON;
-  const raw = configured || fs.readFileSync(path.join(__dirname, "tss-observers.json"), "utf8");
-  TSS_OBSERVERS = JSON.parse(raw);
-} catch (error) {
-  process.stdout.write("TSS observer configuration unavailable; TSS polling disabled\n");
+  TSS_OBSERVERS = JSON.parse(tssObserversRaw);
+} catch (_error) {
+  throw new Error("Invalid TSS observer configuration JSON; see tss-observers.example.json");
 }
 const tssHealthPoller = createTssHealthPoller(TSS_OBSERVERS);
 

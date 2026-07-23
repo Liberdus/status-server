@@ -1,5 +1,14 @@
 # Status
 
+## TSS observer health configuration
+
+TSS health polling is required. Configure at least one observer in
+`tss-observers.json`, using `tss-observers.example.json` as the schema example,
+or set `TSS_OBSERVERS_JSON` to the same JSON array at deployment. Each observer
+requires an `id`, `label`, `network`, and HTTP(S) `baseUrl`. The server exits at
+startup when this configuration is missing, empty, or invalid so signer alerts
+cannot be silently disabled.
+
 This is a status updating service to monitor the current uptime for the services we have running to track outages at a glance.
 
 ## Frontend route map

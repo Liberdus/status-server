@@ -115,8 +115,11 @@ function validateObserver(observer) {
 }
 
 function createTssHealthPoller(observers, options = {}) {
-  if (!Array.isArray(observers) || !observers.every(validateObserver)) {
-    throw new Error("Invalid tss-observers.json configuration");
+  if (!Array.isArray(observers) || observers.length === 0) {
+    throw new Error("TSS observer configuration is required and must contain at least one observer");
+  }
+  if (!observers.every(validateObserver)) {
+    throw new Error("Invalid TSS observer configuration: every entry requires id, label, network, and an http(s) baseUrl");
   }
   const previousCheckedAt = new Map();
   let snapshot = { generatedAt: null, results: [] };
