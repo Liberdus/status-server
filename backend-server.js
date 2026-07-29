@@ -108,6 +108,12 @@ try {
   throw new Error("Invalid TSS observer configuration JSON; see tss-observers.example.json");
 }
 const tssHealthPoller = createTssHealthPoller(TSS_OBSERVERS);
+const TSS_PROCESS_HEALTH_POLL_INTERVAL_MS = Number.parseInt(
+  process.env.TSS_PROCESS_HEALTH_POLL_INTERVAL_MS || "60000", 10
+);
+const TSS_PROVIDER_HEALTH_POLL_INTERVAL_MS = Number.parseInt(
+  process.env.TSS_PROVIDER_HEALTH_POLL_INTERVAL_MS || "86400000", 10
+);
 
 function httpJsonGet(targetUrl, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -728,14 +734,22 @@ setInterval(() => {
   });
 }, PROBE_INTERVAL_MS);
 
-tssHealthPoller.pollAll().catch((error) => {
-  process.stdout.write(`Initial TSS health poll failed: ${error && error.message ? error.message : "poll failed"}\n`);
+tssHealthPoller.pollProcessHealth().catch((error) => {
+  process.stdout.write(`Initial TSS process health poll failed: ${error && error.message ? error.message : "poll failed"}\n`);
 });
 setInterval(() => {
-  tssHealthPoller.pollAll().catch((error) => {
-    process.stdout.write(`Periodic TSS health poll failed: ${error && error.message ? error.message : "poll failed"}\n`);
+  tssHealthPoller.pollProcessHealth().catch((error) => {
+    process.stdout.write(`Periodic TSS process health poll failed: ${error && error.message ? error.message : "poll failed"}\n`);
   });
-}, tssHealthPoller.intervalMs);
+}, TSS_PROCESS_HEALTH_POLL_INTERVAL_MS);
+tssHealthPoller.pollProviderHealth().catch((error) => {
+  process.stdout.write(`Initial TSS provider health poll failed: ${error && error.message ? error.message : "poll failed"}\n`);
+});
+setInterval(() => {
+  tssHealthPoller.pollProviderHealth().catch((error) => {
+    process.stdout.write(`Periodic TSS provider health poll failed: ${error && error.message ? error.message : "poll failed"}\n`);
+  });
+}, TSS_PROVIDER_HEALTH_POLL_INTERVAL_MS);
 
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && (req.url === "/" || req.url === "")) {
