@@ -15,7 +15,7 @@
     "group": "Devnet",
     "urlEnv": "SVC_DEV_ARCHIVER_URL",
     "checker": "cycleFreshSeconds",
-    "maxAgeSeconds": 120
+    "maxAgeSeconds": 150
   },
   {
     "id": "dev-explorer",
@@ -24,7 +24,7 @@
     "group": "Devnet",
     "urlEnv": "SVC_DEV_EXPLORER_URL",
     "checker": "cycleFreshSeconds",
-    "maxAgeSeconds": 120
+    "maxAgeSeconds": 150
   },
   {
     "id": "dev-notification",
@@ -60,7 +60,7 @@
     "group": "Testnet",
     "urlEnv": "SVC_TEST_ARCHIVER_1_URL",
     "checker": "cycleFreshSeconds",
-    "maxAgeSeconds": 120
+    "maxAgeSeconds": 150
   },
   {
     "id": "test-archiver-2",
@@ -69,7 +69,7 @@
     "group": "Testnet",
     "urlEnv": "SVC_TEST_ARCHIVER_2_URL",
     "checker": "cycleFreshSeconds",
-    "maxAgeSeconds": 120
+    "maxAgeSeconds": 150
   },
   {
     "id": "test-explorer",
@@ -78,7 +78,7 @@
     "group": "Testnet",
     "urlEnv": "SVC_TEST_EXPLORER_URL",
     "checker": "cycleFreshSeconds",
-    "maxAgeSeconds": 120
+    "maxAgeSeconds": 150
   },
   {
     "id": "test-notification",
