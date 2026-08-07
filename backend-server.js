@@ -20,7 +20,11 @@ function loadEnvFile(filePath) {
         process.env[key] = value;
       }
     }
-  } catch (error) {}
+  } catch (error) {
+    process.stderr.write(
+      `Warning: Failed to load .env file: ${error && error.message ? error.message : String(error)}\n`
+    );
+  }
 }
 
 loadEnvFile(path.join(__dirname, ".env"));
@@ -41,48 +45,146 @@ try {
 } catch (error) {
   db = null;
   process.stdout.write(
-    `SQLite history database disabled: ${
-      error && error.message ? error.message : String(error)
+    `SQLite history database disabled: ${error && error.message ? error.message : String(error)
     }\n`
   );
 }
 
-const PORT = process.env.PORT || 6969;
+function validateRuntimeConfig(rawPort, services) {
+  const response = { success: false, reason: "" };
+  const isNonEmptyString = (value) =>
+    typeof value === "string" && value.trim().length > 0;
+  const numericPort = Number(rawPort);
+  if (!Number.isInteger(numericPort)) {
+    response.reason = 'config "PORT" must be an integer';
+    return response;
+  }
+  if (numericPort < 1 || numericPort > 65535) {
+    response.reason = 'config "PORT" must be between 1 and 65535';
+    return response;
+  }
+  if (!Array.isArray(services)) {
+    response.reason = 'services.json must contain an array';
+    return response;
+  }
+  const seenIds = new Set();
+  for (let i = 0; i < services.length; i += 1) {
+    const service = services[i];
+    if (!service || typeof service !== "object") {
+      response.reason = `service[${i}] must be an object`;
+      return response;
+    }
+    if (!isNonEmptyString(service.id)) {
+      response.reason = `service[${i}] "id" must be a non-empty string`;
+      return response;
+    }
+    if (seenIds.has(service.id)) {
+      response.reason = `service[${i}] "id" must be unique`;
+      return response;
+    }
+    if (!isNonEmptyString(service.name)) {
+      response.reason = `service[${i}] "name" must be a non-empty string`;
+      return response;
+    }
+    if (!isNonEmptyString(service.checker)) {
+      response.reason = `service[${i}] "checker" must be a non-empty string`;
+      return response;
+    }
+    if (
+      service.checker !== "statusEquals" &&
+      service.checker !== "cycleFreshSeconds"
+    ) {
+      response.reason = `service[${i}] "checker" must be "statusEquals" or "cycleFreshSeconds"`;
+      return response;
+    }
+    if (service.checker === "statusEquals") {
+      if (!isNonEmptyString(service.expectedStatus)) {
+        response.reason = `service[${i}] "expectedStatus" must be a non-empty string when checker is "statusEquals"`;
+        return response;
+      }
+    }
+    if (service.checker === "cycleFreshSeconds") {
+      if (
+        typeof service.maxAgeSeconds !== "number" ||
+        !Number.isFinite(service.maxAgeSeconds) ||
+        service.maxAgeSeconds <= 0
+      ) {
+        response.reason = `service[${i}] "maxAgeSeconds" must be a number > 0 when checker is "cycleFreshSeconds"`;
+        return response;
+      }
+    }
+    if (service.urlEnv != null && !isNonEmptyString(service.urlEnv)) {
+      response.reason = `service[${i}] "urlEnv" must be a non-empty string when provided`;
+      return response;
+    }
+    if (service.url != null && !isNonEmptyString(service.url)) {
+      response.reason = `service[${i}] "url" must be a non-empty string when provided`;
+      return response;
+    }
+    const resolvedUrl =
+      service.urlEnv && typeof service.urlEnv === "string"
+        ? process.env[service.urlEnv]
+        : undefined;
+    const effectiveUrl = resolvedUrl || service.url;
+    if (!isNonEmptyString(effectiveUrl)) {
+      response.reason = `service[${i}] must define "url" or a valid "urlEnv"`;
+      return response;
+    }
+    try {
+      new URL(effectiveUrl);
+    } catch (error) {
+      response.reason = `service[${i}] URL is invalid`;
+      return response;
+    }
+    seenIds.add(service.id);
+  }
+  response.success = true;
+  return response;
+}
+
+const rawPort = process.env.PORT || 6969;
+const PORT = Number(rawPort);
 
 let SERVICES = [];
 try {
   const servicesConfigPath = path.join(__dirname, "services.json");
   const raw = fs.readFileSync(servicesConfigPath, "utf8");
   const parsed = JSON.parse(raw);
-  if (Array.isArray(parsed)) {
-    SERVICES = parsed.map((service) => {
-      const urlFromEnv =
-        service.urlEnv && typeof service.urlEnv === "string"
-          ? process.env[service.urlEnv]
-          : undefined;
-      const url = urlFromEnv || service.url || null;
-      const network =
-        typeof service.network === "string" && service.network.length > 0
-          ? service.network
-          : typeof service.environment === "string" &&
-            service.environment.length > 0
-          ? service.environment
-          : null;
-      return {
-        id: service.id,
-        name: service.name,
-        network,
-        environment: network,
-        group: service.group,
-        url,
-        checker: service.checker,
-        expectedStatus: service.expectedStatus,
-        maxAgeSeconds: service.maxAgeSeconds,
-      };
+  const validation = validateRuntimeConfig(rawPort, parsed);
+  if (!validation.success) {
+    throw new Error(validation.reason);
+  }
+  SERVICES = [];
+  for (const service of parsed) {
+    const urlFromEnv = service.urlEnv ? process.env[service.urlEnv] : undefined;
+    const url = urlFromEnv || service.url || null;
+    let network = null;
+    if (typeof service.network === "string" && service.network.length > 0) {
+      network = service.network;
+    } else if (
+      typeof service.environment === "string" &&
+      service.environment.length > 0
+    ) {
+      network = service.environment;
+    }
+    SERVICES.push({
+      id: service.id,
+      name: service.name,
+      network,
+      environment: network,
+      group: service.group,
+      url,
+      checker: service.checker,
+      expectedStatus: service.expectedStatus,
+      maxAgeSeconds: service.maxAgeSeconds,
     });
   }
 } catch (error) {
   SERVICES = [];
+  process.stderr.write(
+    `Invalid configuration: ${error && error.message ? error.message : String(error)}\n`
+  );
+  process.exit(1);
 }
 
 function httpJsonGet(targetUrl, timeoutMs) {
@@ -98,9 +200,19 @@ function httpJsonGet(targetUrl, timeoutMs) {
       method: "GET",
       timeout: timeoutMs,
     };
+    const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB limit
     const req = transport.request(options, (res) => {
       const chunks = [];
+      let totalSize = 0;
       res.on("data", (chunk) => {
+        if (settled) return;
+        totalSize += chunk.length;
+        if (totalSize > MAX_BODY_SIZE) {
+          settled = true;
+          req.destroy(new Error("Response body exceeds maximum size"));
+          reject(new Error("Response body exceeds maximum size"));
+          return;
+        }
         chunks.push(chunk);
       });
       res.on("end", () => {
@@ -211,8 +323,8 @@ async function probeService(service) {
       service.checker === "statusEquals"
         ? checkByStatusEquals(service, payload)
         : service.checker === "cycleFreshSeconds"
-        ? checkByCycleFresh(service, payload)
-        : { ok: false, reason: "Unknown checker configuration" };
+          ? checkByCycleFresh(service, payload)
+          : { ok: false, reason: "Unknown checker configuration" };
     let state = "operational";
     let detail = baseCheck.reason || null;
     let healthPct = 100;
@@ -264,10 +376,10 @@ function computeIndicator(services) {
         typeof service.healthPct === "number"
           ? service.healthPct
           : service.state === "operational"
-          ? 100
-          : service.state === "degraded"
-          ? 20
-          : 0;
+            ? 100
+            : service.state === "degraded"
+              ? 20
+              : 0;
       if (pct === 0) {
         outageCount += 1;
       } else if (pct < 100) {
@@ -424,39 +536,55 @@ async function refreshSnapshot() {
   const results = await Promise.all(SERVICES.map((service) => probeService(service)));
   const indicator = computeIndicator(results);
   if (db) {
-    const stmt = db.prepare(
-      "INSERT INTO service_history (service_id, state, latency_ms, checked_at) VALUES (?, ?, ?, ?)"
-    );
-    for (const service of results) {
-      const checkedAt = Date.parse(service.lastCheckedAt);
-      const pct =
-        typeof service.healthPct === "number" ? service.healthPct : null;
-      let historyState = "up";
-      if (pct == null || Number.isNaN(pct)) {
-        historyState = service.state || "up";
-      } else if (pct < 10) {
-        historyState = "down";
-      } else if (pct < 50) {
-        historyState = "issue";
-      } else if (pct < 95) {
-        historyState = "slow";
-      } else {
-        historyState = "up";
+    try {
+      const stmt = db.prepare(
+        "INSERT INTO service_history (service_id, state, latency_ms, checked_at) VALUES (?, ?, ?, ?)"
+      );
+      try {
+        for (const service of results) {
+          const checkedAt = Date.parse(service.lastCheckedAt);
+          const pct =
+            typeof service.healthPct === "number" ? service.healthPct : null;
+          let historyState = "up";
+          if (pct == null || Number.isNaN(pct)) {
+            historyState = service.state || "up";
+          } else if (pct < 10) {
+            historyState = "down";
+          } else if (pct < 50) {
+            historyState = "issue";
+          } else if (pct < 95) {
+            historyState = "slow";
+          } else {
+            historyState = "up";
+          }
+          stmt.run(
+            service.id,
+            historyState,
+            service.latencyMs,
+            Number.isNaN(checkedAt) ? Date.now() : checkedAt
+          );
+        }
+      } finally {
+        stmt.finalize();
       }
-      stmt.run(
-        service.id,
-        historyState,
-        service.latencyMs,
-        Number.isNaN(checkedAt) ? Date.now() : checkedAt
+      const retentionMs = 7 * 24 * 60 * 60 * 1000;
+      const cutoff = Date.now() - retentionMs;
+      db.run(
+        "DELETE FROM service_history WHERE checked_at < ?",
+        [cutoff],
+        (err) => {
+          if (err) {
+            process.stdout.write(
+              `Warning: Failed to clean old history: ${err.message}\n`
+            );
+          }
+        }
+      );
+    } catch (error) {
+      process.stdout.write(
+        `Warning: Failed to save history: ${error && error.message ? error.message : String(error)}\n`
       );
     }
-    stmt.finalize();
-    const retentionMs = 7 * 24 * 60 * 60 * 1000;
-    const cutoff = Date.now() - retentionMs;
-    db.run(
-      "DELETE FROM service_history WHERE checked_at < ?",
-      [cutoff]
-    );
   }
   process.stdout.write(
     `Snapshot refreshed: ${results.length} services, indicator=${indicator.indicator}\n`
@@ -568,3 +696,35 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   process.stdout.write(`Status backend listening on http://localhost:${PORT}\n`);
 });
+
+function gracefulShutdown() {
+  process.stdout.write("Shutting down gracefully...\n");
+  server.close(() => {
+    process.stdout.write("HTTP server closed\n");
+    if (db) {
+      db.close((err) => {
+        if (err) {
+          process.stderr.write(`Error closing database: ${err.message}\n`);
+          process.exit(1);
+        } else {
+          process.stdout.write("Database closed\n");
+          process.exit(0);
+        }
+      });
+    } else {
+      process.exit(0);
+    }
+  });
+
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    process.stderr.write("Forced shutdown after timeout\n");
+    if (db) {
+      db.close(() => { });
+    }
+    process.exit(1);
+  }, 10000);
+}
+
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
