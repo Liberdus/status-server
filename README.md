@@ -179,7 +179,7 @@ The backend follows these rules for each probe:
   - `state = "outage"`, `healthPct = 0`.
 - If the endpoint responds, run the configured checker:
   - `checker: "httpOk"`:
-    - Treats any HTTP `2xx` or `3xx` response as healthy.
+    - Treats only HTTP `2xx` responses as healthy.
   - `checker: "statusEquals"`:
     - Compares the JSON `status` field to `expectedStatus`.
   - `checker: "cycleFreshSeconds"`:
@@ -436,3 +436,18 @@ Categories in the frontend are inferred from service names:
 
 - Names containing `"gateway"`, `"archiver"`, `"explorer"`, `"monitor"`, `"notification"`, `"faucet"`, `"oauth"`, or `"golden"` are grouped under the matching category (Gateways, Archivers, Explorers, Monitors, Notification, Faucet, OAuth, Golden Ticket).
 - If a service name does not contain any of these keywords, it is ignored for category-level grouping but still counted for the overall status.
+
+## Security controls and deployment migration
+
+- The HTTP listener now binds to `127.0.0.1` by default. Place a TLS reverse proxy in front of it. Containers or separate proxy hosts must set `HOST` explicitly and restrict ingress at the firewall; do not expose the raw origin unnecessarily. Changing a port to 443 does not enable TLS.
+- Probes use a total deadline capped at 30 seconds and a 1 MiB JSON response limit. They do not follow redirects. Status-only probes complete at the response headers. Failed, truncated and non-2xx responses are recorded as failures. At most four probes run at once and refresh rounds do not overlap.
+- `/health` and `/api/summary` return 503 until a nonempty snapshot is available or when it becomes stale. Freshness allows one polling interval, the maximum bounded probe round, and one minute of scheduling tolerance. Load balancers using `/health` must allow startup warmup.
+- Public summaries omit probe URLs and replace raw diagnostic details with a generic message. Consumers that previously linked to probe endpoints must use separately maintained public links. No sensitive endpoint URL should be placed in a service display name or group.
+- History queries filter by configured services and use indexes. Identical requests share a 30-second cache; at most two different queries and 32 waiters per query run concurrently. Overload returns 503 with `Retry-After: 30`. Unknown networks return 400. Configure edge request-rate limits as an additional operational control.
+- Missing history is `null`, not fabricated success or failure. Update the dashboard alongside this change to display unknown samples.
+
+Run `node --test test/*.test.cjs` on a supported Node.js LTS release. The tests use synthetic loopback endpoints and do not load deployment environment files or send Discord messages.
+
+Before deployment, migrate remote plaintext probe URLs to authenticated HTTPS or a protected private transport, confirm the runtime and dependency inventory, review origin firewall/service-user permissions, and rotate any credentials that may have been exposed. These operational changes are not performed by the code patch.
+
+The watchdog shares the bounded HTTP probe implementation and marks aged snapshots unknown. Deploy this PR to `system-update-v1`; the companion main-branch PR carries equivalent backend protections without importing this branch's feature work. Coordinate any merge into RPC branches so their additional outbound request paths receive the same bounds.

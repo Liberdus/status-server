@@ -1,4 +1,5 @@
 const http = require("http");
+const { httpStatusGet } = require("./lib/probe-http");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
@@ -110,41 +111,6 @@ function formatBotHealthResponse(snapshot) {
   return lines.join("\n");
 }
 
-function httpStatusGet(targetUrl, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const urlObj = new URL(targetUrl);
-    const isHttps = urlObj.protocol === "https:";
-    const transport = isHttps ? https : http;
-    const options = {
-      hostname: urlObj.hostname,
-      path: urlObj.pathname + urlObj.search,
-      port: urlObj.port || (isHttps ? 443 : 80),
-      method: "GET",
-      timeout: timeoutMs,
-    };
-    const req = transport.request(options, (res) => {
-      res.resume();
-      res.on("end", () => {
-        if (settled) return;
-        settled = true;
-        resolve({ statusCode: res.statusCode });
-      });
-    });
-    req.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    });
-    req.on("timeout", () => {
-      if (settled) return;
-      settled = true;
-      req.destroy(new Error("Request timeout"));
-    });
-    req.end();
-  });
-}
-
 function postDiscordChannelMessage(channelId, token, content) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
@@ -243,7 +209,7 @@ async function checkBotServer() {
       throw new Error("Missing SVC_DISCORD_STATUS_BOT_URL");
     }
     const result = await httpStatusGet(BOT_HEALTH_URL, REQUEST_TIMEOUT_MS);
-    if (result.statusCode < 200 || result.statusCode >= 400) {
+    if (result.statusCode < 200 || result.statusCode >= 300) {
       throw new Error(`HTTP status ${result.statusCode}`);
     }
     await sendTransitionAlert("up");
@@ -424,9 +390,13 @@ const statusServer = http.createServer((req, res) => {
     res.end(JSON.stringify({ status: "not_found" }));
     return;
   }
-  res.statusCode = lastCheckSnapshot.status === "healthy" ? 200 : 503;
+  const age = Date.now() - Date.parse(lastCheckSnapshot.checkedAt);
+  const fresh = Number.isFinite(age) && age >= 0 && age <= CHECK_INTERVAL_MS + Math.min(REQUEST_TIMEOUT_MS, 30000) + 60000;
+  const snapshot = fresh ? lastCheckSnapshot : { ...lastCheckSnapshot, status: "unknown", detail: "Watchdog snapshot is stale" };
+  res.statusCode = snapshot.status === "healthy" ? 200 : 503;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(lastCheckSnapshot));
+  res.setHeader("Cache-Control", "no-store");
+  res.end(JSON.stringify(snapshot));
 });
 
 statusServer.on("error", (error) => {

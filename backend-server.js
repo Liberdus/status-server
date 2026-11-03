@@ -1,8 +1,12 @@
 const http = require("http");
-const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
+const { httpJsonGet, httpStatusGet } = require("./lib/probe-http");
+const { createHistoryCache } = require("./lib/history-cache");
+const { createRefreshRunner, mapLimited } = require("./lib/refresh");
+const readHistory = createHistoryCache();
+const PROBE_CONCURRENCY = 4;
 
 function loadEnvFile(filePath) {
   try {
@@ -34,6 +38,8 @@ try {
     db.run(
       "CREATE TABLE IF NOT EXISTS service_history (id INTEGER PRIMARY KEY AUTOINCREMENT, service_id TEXT NOT NULL, state TEXT NOT NULL, latency_ms INTEGER, checked_at INTEGER NOT NULL)"
     );
+    db.run("CREATE INDEX IF NOT EXISTS service_history_service_time ON service_history (service_id, checked_at)");
+    db.run("CREATE INDEX IF NOT EXISTS service_history_time ON service_history (checked_at)");
     process.stdout.write(
       "SQLite history database enabled at ./status-history.db\n"
     );
@@ -95,94 +101,15 @@ try {
   SERVICES = [];
 }
 
-function httpJsonGet(targetUrl, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const urlObj = new URL(targetUrl);
-    const isHttps = urlObj.protocol === "https:";
-    const transport = isHttps ? https : http;
-    const options = {
-      hostname: urlObj.hostname,
-      path: urlObj.pathname + urlObj.search,
-      port: urlObj.port || (isHttps ? 443 : 80),
-      method: "GET",
-      timeout: timeoutMs,
-    };
-    const req = transport.request(options, (res) => {
-      const chunks = [];
-      res.on("data", (chunk) => {
-        chunks.push(chunk);
-      });
-      res.on("end", () => {
-        if (settled) return;
-        settled = true;
-        const body = Buffer.concat(chunks).toString("utf8");
-        try {
-          const json = JSON.parse(body);
-          resolve({ statusCode: res.statusCode, json });
-        } catch (error) {
-          reject(error);
-        }
-      });
-    });
-    req.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    });
-    req.on("timeout", () => {
-      if (settled) return;
-      settled = true;
-      req.destroy(new Error("Request timeout"));
-    });
-    req.end();
-  });
-}
-
-function httpStatusGet(targetUrl, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const urlObj = new URL(targetUrl);
-    const isHttps = urlObj.protocol === "https:";
-    const transport = isHttps ? https : http;
-    const options = {
-      hostname: urlObj.hostname,
-      path: urlObj.pathname + urlObj.search,
-      port: urlObj.port || (isHttps ? 443 : 80),
-      method: "GET",
-      timeout: timeoutMs,
-    };
-    const req = transport.request(options, (res) => {
-      res.resume();
-      res.on("end", () => {
-        if (settled) return;
-        settled = true;
-        resolve({ statusCode: res.statusCode });
-      });
-    });
-    req.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    });
-    req.on("timeout", () => {
-      if (settled) return;
-      settled = true;
-      req.destroy(new Error("Request timeout"));
-    });
-    req.end();
-  });
-}
-
 function checkByHttpOk(service, payload) {
   const statusCode = Number(payload && payload.statusCode);
-  if (statusCode >= 200 && statusCode < 400) {
+  if (statusCode >= 200 && statusCode < 300) {
     return { ok: true, reason: null };
   }
   if (Number.isFinite(statusCode)) {
     return {
       ok: false,
-      reason: `HTTP status ${statusCode} was outside the expected 2xx/3xx range`,
+      reason: `HTTP status ${statusCode} was outside the expected 2xx range`,
     };
   }
   return { ok: false, reason: "Missing HTTP status code" };
@@ -273,6 +200,9 @@ async function probeService(service) {
       service.checker === "httpOk"
         ? await httpStatusGet(service.url, timeoutMs)
         : await httpJsonGet(service.url, timeoutMs);
+    if (payload.statusCode < 200 || payload.statusCode >= 300) {
+      throw new Error("Probe returned an unsuccessful HTTP status");
+    }
     const latencyMs = Date.now() - startedAt;
     const baseCheck =
       service.checker === "httpOk"
@@ -323,6 +253,7 @@ async function probeService(service) {
 }
 
 function computeIndicator(services) {
+  if (!services.length) return { indicator: "unknown", description: "Status Unknown" };
   let indicator = "none";
   const total = services.length;
   if (total > 0) {
@@ -530,7 +461,7 @@ function queryHistory(days, intervalMinutes, network, callback) {
   const maxDays = 7;
   const clampedDays =
     typeof days === "number" && Number.isFinite(days) && days > 0
-      ? Math.min(Math.floor(days), maxDays)
+      ? Math.max(1, Math.min(Math.floor(days), maxDays))
       : maxDays;
   const safeIntervalMinutes =
     typeof intervalMinutes === "number" && Number.isFinite(intervalMinutes)
@@ -544,9 +475,13 @@ function queryHistory(days, intervalMinutes, network, callback) {
       (service) => !network || service.network === network
     ).map((service) => service.id)
   );
-  const sql =
-    "SELECT service_id, state, checked_at FROM service_history WHERE checked_at >= ? ORDER BY checked_at ASC";
-  db.all(sql, [sinceMs], (error, rows) => {
+  const ids = [...allowedServiceIds];
+  if (!ids.length) { callback(new Error("Unknown network"), null); return; }
+  const placeholders = ids.map(() => "?").join(",");
+  const sql = `SELECT service_id, state, checked_at FROM service_history
+    WHERE service_id IN (${placeholders}) AND checked_at >= ?
+    ORDER BY service_id, checked_at ASC`;
+  db.all(sql, [...ids, sinceMs], (error, rows) => {
     if (error) {
       callback(error, null);
       return;
@@ -683,7 +618,7 @@ function queryHistory(days, intervalMinutes, network, callback) {
 }
 
 async function refreshSnapshot() {
-  const results = await Promise.all(SERVICES.map((service) => probeService(service)));
+  const results = await mapLimited(SERVICES, PROBE_CONCURRENCY, probeService);
   const indicator = computeIndicator(results);
   recordSamples(results);
   process.stdout.write(
@@ -697,7 +632,23 @@ async function refreshSnapshot() {
   };
 }
 
-refreshSnapshot().catch((error) => {
+const runRefresh = createRefreshRunner(refreshSnapshot);
+const SNAPSHOT_MAX_AGE_MS = PROBE_INTERVAL_MS + Math.ceil(SERVICES.length / PROBE_CONCURRENCY) * 30000 + 60000;
+function snapshotIsFresh() {
+  const age = Date.now() - Date.parse(latestSnapshot.generatedAt);
+  return latestSnapshot.services.length > 0 && Number.isFinite(age) && age >= 0 && age <= SNAPSHOT_MAX_AGE_MS;
+}
+function publicService(service) {
+  return {
+    id: service.id, name: service.name, network: service.network,
+    environment: service.environment, group: service.group, state: service.state,
+    healthPct: service.healthPct, latencyMs: service.latencyMs,
+    lastCheckedAt: service.lastCheckedAt,
+    detail: service.state === "operational" ? null : "Service check did not pass",
+  };
+}
+
+runRefresh().catch((error) => {
   process.stdout.write(
     `Initial snapshot refresh error: ${error && error.message ? error.message : String(
       error
@@ -705,7 +656,7 @@ refreshSnapshot().catch((error) => {
   );
 });
 setInterval(() => {
-  refreshSnapshot().catch((error) => {
+  runRefresh().catch((error) => {
     process.stdout.write(
       `Periodic snapshot refresh error: ${error && error.message ? error.message : String(
         error
@@ -715,28 +666,45 @@ setInterval(() => {
 }, PROBE_INTERVAL_MS);
 
 const server = http.createServer((req, res) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  let fullUrl;
+  try { fullUrl = new URL(req.url, "http://localhost"); }
+  catch { res.statusCode = 400; res.end("Invalid request"); return; }
+  if (["/api/summary", "/api/history"].includes(fullUrl.pathname)) {
+    const network = fullUrl.searchParams.get("network") || "testnet";
+    if (!SERVICES.some(service => service.network === network)) {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ error: "Unknown network" }));
+      return;
+    }
+  }
   if (req.method === "GET" && (req.url === "/" || req.url === "")) {
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end("status: running version: 0.01");
     return;
   }
-  if (req.method === "GET" && req.url && req.url.startsWith("/api/history")) {
-    const fullUrl = new URL(req.url, `http://localhost:${PORT}`);
+  if (req.method === "GET" && fullUrl.pathname === "/api/history") {
     const daysParam = fullUrl.searchParams.get("days");
     const intervalParam = fullUrl.searchParams.get("interval");
     const networkParam = fullUrl.searchParams.get("network");
-    const daysValue = daysParam ? Number(daysParam) : 7;
+    const rawDays = Number(daysParam);
+    const daysValue = Number.isFinite(rawDays) && rawDays > 0 ? Math.max(1, Math.min(7, Math.floor(rawDays))) : 7;
     const intervalMinutes = resolveIntervalMinutes(intervalParam);
     const targetNetwork = networkParam || "testnet";
-    queryHistory(daysValue, intervalMinutes, targetNetwork, (error, payload) => {
+    const cacheKey = JSON.stringify([daysValue, intervalMinutes, targetNetwork]);
+    readHistory(cacheKey, done => queryHistory(daysValue, intervalMinutes, targetNetwork, done), (error, payload) => {
       if (error) {
-        res.statusCode = db ? 500 : 503;
+        res.statusCode = error.busy ? 503 : db ? 500 : 503;
+        if (error.busy) res.setHeader("Retry-After", "30");
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.setHeader("Access-Control-Allow-Origin", "*");
         res.end(
           JSON.stringify({
-            error: db
+            error: error.busy ? "History is busy; retry shortly" : db
               ? "Failed to read history"
               : "History database is not available",
           })
@@ -750,8 +718,13 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  if (req.method === "GET" && req.url && req.url.startsWith("/api/summary")) {
-    const fullUrl = new URL(req.url, `http://localhost:${PORT}`);
+  if (req.method === "GET" && fullUrl.pathname === "/api/summary") {
+    if (!snapshotIsFresh()) {
+      res.statusCode = 503;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ error: "Status snapshot unavailable or stale", generatedAt: latestSnapshot.generatedAt }));
+      return;
+    }
     const networkParam = fullUrl.searchParams.get("network");
     const targetNetwork = networkParam || "testnet";
     const allowedServiceIds = new Set(
@@ -765,7 +738,7 @@ const server = http.createServer((req, res) => {
     const indicator = computeIndicator(services);
     const payload = {
       generatedAt: latestSnapshot.generatedAt,
-      services,
+      services: services.map(publicService),
       indicator: indicator.indicator,
       statusDescription: indicator.description,
     };
@@ -808,12 +781,13 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method === "GET" && req.url === "/health") {
-    res.statusCode = 200;
+    const fresh = snapshotIsFresh();
+    res.statusCode = fresh ? 200 : 503;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.end(
       JSON.stringify({
-        status: "ok",
+        status: fresh ? "ok" : "stale",
         generatedAt: latestSnapshot.generatedAt,
       })
     );
@@ -825,6 +799,6 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({ error: "Not found" }));
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, process.env.HOST || "127.0.0.1", () => {
   process.stdout.write(`Status backend listening on http://localhost:${PORT}\n`);
 });
